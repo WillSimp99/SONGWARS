@@ -105,6 +105,29 @@
   .round-pill{ background:#0e0e10; border:1px solid rgba(255,255,255,.1); padding:5px 12px; border-radius:20px; font-size:12.5px; font-weight:700; color:var(--muted); }
   .score-pill{ display:flex; gap:8px; font-size:13px; font-weight:800; }
   .score-pill .p1{color:var(--p1);} .score-pill .p2{color:var(--p2);}
+  .scoreboard{
+    display:flex; align-items:stretch; background:#0a0a0d; border:1px solid rgba(255,255,255,.14);
+    border-radius:14px; overflow:hidden; margin-bottom:16px; box-shadow:0 8px 22px rgba(0,0,0,.4);
+  }
+  .scoreboard .side{ flex:1; padding:10px 6px; text-align:center; min-width:0; }
+  .scoreboard .side.p1{ background:linear-gradient(180deg, rgba(145,71,255,.24), transparent); }
+  .scoreboard .side.p2{ background:linear-gradient(180deg, rgba(255,140,66,.24), transparent); }
+  .scoreboard .side .name{ font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .scoreboard .side .val{ font-size:34px; font-weight:900; line-height:1.15; font-variant-numeric:tabular-nums; }
+  .scoreboard .side.p1 .val{ color:var(--p1); }
+  .scoreboard .side.p2 .val{ color:var(--p2); }
+  .scoreboard .mid{ display:flex; flex-direction:column; align-items:center; justify-content:center; padding:0 12px; background:#141417; flex:none; }
+  .scoreboard .mid .vs{ font-size:11px; font-weight:800; color:var(--muted); letter-spacing:.05em; }
+  .scoreboard .mid .round{ font-size:10.5px; color:var(--muted); margin-top:3px; white-space:nowrap; }
+  .scoreboard-multi{
+    display:flex; gap:7px; overflow-x:auto; align-items:center; background:#0a0a0d; border:1px solid rgba(255,255,255,.14);
+    border-radius:14px; padding:10px 10px; margin-bottom:16px; box-shadow:0 8px 22px rgba(0,0,0,.4);
+  }
+  .scoreboard-multi::-webkit-scrollbar{ height:4px; }
+  .scoreboard-multi .round-tag{ flex:none; font-size:11px; color:var(--muted); font-weight:800; padding:0 8px 0 0; border-right:1px solid rgba(255,255,255,.1); white-space:nowrap; }
+  .scoreboard-multi .slot{ flex:none; min-width:60px; text-align:center; background:#141417; border-radius:10px; padding:7px 10px; }
+  .scoreboard-multi .slot .name{ font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:78px; }
+  .scoreboard-multi .slot .val{ font-size:22px; font-weight:900; color:var(--accent); font-variant-numeric:tabular-nums; }
   .wheel-wrap{ position:relative; width:250px; height:250px; margin:10px auto 20px; }
   .wheel-pointer{
     position:absolute; top:-6px; left:50%; transform:translateX(-50%);
@@ -170,6 +193,12 @@
   .search-list{ margin-top:8px; max-height:260px; overflow-y:auto; }
   .search-item{ display:flex; align-items:center; gap:10px; padding:8px; border-radius:10px; cursor:pointer; margin-bottom:6px; background:#0e0e10; border:1px solid rgba(255,255,255,.06); }
   .search-item:hover{ border-color:var(--accent); }
+  .search-item.selected{ border-color:var(--success); background:rgba(0,199,140,.08); }
+  select{
+    width:100%; background:#0e0e10; border:1px solid rgba(255,255,255,.12); color:var(--text);
+    border-radius:10px; padding:11px 12px; font-size:14.5px; font-family:inherit;
+  }
+  select:focus{ outline:none; border-color:var(--accent); }
   .search-item img{ width:48px; height:48px; object-fit:cover; border-radius:6px; flex:none; background:#000; }
   .search-item .meta{ min-width:0; }
   .search-item .meta .t{ font-size:13.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -215,14 +244,18 @@ const PALETTE = ['#9147ff','#ff8c42','#00c78c','#ff5c5c','#3ea6ff','#ffd166','#c
 
 const state = {
   screen:'modeSelect',
-  gameMode:'duel',
+  gameMode:'battle',
   party:{ participants:[], artistMode:false, rounds:[], bracketSize:0, championIdx:null, currentMatch:null },
   king:{ kingIdx:null, participants:[], queue:[], streak:0, history:[], roundsToWinHill:10, matchFormat:'bo1' },
+  battle:{ players:[], scores:[], submitOrder:[], submitStep:0, submissions:[], playbackOrder:[], playbackIndex:0, ballot:[], ballotLocked:false, roundPoints:[], totalBallots:0, hostPickOpen:false },
   p1Name:'Joueur 1', p2Name:'Joueur 2',
   totalRounds:5,
   wheelEnabled:false,
-  themesPool:[], themesDraftInput:'',
-  wheelBulkOpen:false, wheelBulkDraft:'',
+  themesPool:[],
+  themesLibrary:[],
+  homeSettingsOpen:false,
+  themesLibraryBulkOpen:false,
+  themesLibraryBulkDraft:'',
   timerEnabled:false, timerSeconds:90,
   timerRemaining:0, timerHandle:null,
   round:1,
@@ -237,9 +270,7 @@ const state = {
   hostPickOpen:false,
   history:[],
   apiKeys:{youtube:'', spotifyId:'', spotifySecret:''},
-  apiSettingsOpen:false,
   localLibrary:[],
-  libraryOpen:false,
   localLibraryQuery:'',
   gameSettingsOpen:false,
   spotifyToken:null, spotifyTokenExpiry:0,
@@ -249,8 +280,7 @@ const state = {
   searchResults:[],
   searchLoading:false,
   searchError:'',
-  selectedTrack:null,
-  commentDraft:''
+  selectedTrack:null
 };
 let searchDebounceHandle=null;
 
@@ -258,16 +288,21 @@ const app = document.getElementById('app');
 function render(){
   const map = {
     modeSelect: renderModeSelect,
-    setup: renderSetup,
+    battleSetup: renderBattleSetup,
     partySetup: renderPartySetup,
     bracketView: renderBracketView,
     tournamentChampion: renderTournamentChampion,
     kingSetup: renderKingSetup,
     kingView: renderKingView,
     kingChampion: renderKingChampion,
-    wheelConfig: renderWheelConfig,
     handoff: renderHandoff,
     submit: renderSubmit,
+    battleHandoff: renderBattleHandoff,
+    battleSubmit: renderBattleSubmit,
+    battlePlayback: renderBattlePlayback,
+    battleVote: renderBattleVote,
+    battleResult: renderBattleResult,
+    battleGameOver: renderBattleGameOver,
     wheelSpin: renderWheelSpin,
     playback: renderPlayback,
     vote: renderVote,
@@ -283,12 +318,12 @@ function logo(){
 
 /* ---------- NAVIGATION (retour / quitter) ---------- */
 const BACK_TARGETS = {
-  setup:'modeSelect',
+  battleSetup:'modeSelect',
   partySetup:'modeSelect',
-  kingSetup:'modeSelect',
-  wheelConfig: ()=> state.gameMode==='duel' ? 'setup' : state.gameMode==='party' ? 'partySetup' : 'kingSetup'
+  kingSetup:'modeSelect'
 };
-const QUIT_SCREENS = ['wheelSpin','handoff','submit','playback','vote','result','bracketView','kingView'];
+const QUIT_SCREENS = ['wheelSpin','handoff','submit','playback','vote','result','bracketView','kingView',
+  'battleHandoff','battleSubmit','battlePlayback','battleVote','battleResult'];
 function renderNav(){
   if(state.screen in BACK_TARGETS){
     return `<div class="nav-bar"><button class="nav-btn" onclick="goBack()">← Retour</button></div>`;
@@ -310,9 +345,20 @@ function confirmQuit(){
   }
 }
 function headerBar(){
-  return `<div class="header-bar">
-    <div class="round-pill">Round ${state.round} / ${state.totalRounds}</div>
-    <div class="score-pill"><span class="p1">${state.p1Name} ${state.scoreP1}</span><span>—</span><span class="p2">${state.scoreP2} ${state.p2Name}</span></div>
+  return `<div class="scoreboard">
+    <div class="side p1"><div class="name">${escapeHtml(state.p1Name)}</div><div class="val">${state.scoreP1}</div></div>
+    <div class="mid"><div class="vs">VS</div><div class="round">Round ${state.round}/${state.totalRounds}</div></div>
+    <div class="side p2"><div class="val">${state.scoreP2}</div><div class="name">${escapeHtml(state.p2Name)}</div></div>
+  </div>`;
+}
+function battleHeaderBar(){
+  const b = state.battle;
+  const slots = b.players.map((p,i)=>`
+    <div class="slot"><div class="name">${escapeHtml(p.name)}</div><div class="val">${(b.scores&&b.scores[i])||0}</div></div>
+  `).join('');
+  return `<div class="scoreboard-multi">
+    <div class="round-tag">Round<br>${state.round}/${state.totalRounds}</div>
+    ${slots}
   </div>`;
 }
 
@@ -322,13 +368,16 @@ function renderModeSelect(){
   return `<div class="card">
     <h1>Quel format veux-tu lancer ?</h1>
     <p>Choisis comment la partie va être gérée.</p>
-    <button class="btn" onclick="chooseMode('duel')">🎧 Duel classique — 2 joueurs, chacun soumet ses morceaux</button>
-    <button class="btn secondary" onclick="chooseMode('party')">🎉 Mode Soirée — l'hôte gère tout, tournoi à plusieurs</button>
+    <button class="btn" onclick="chooseMode('battle')">🎉 Battle Royale — 2 à 10 joueurs, top 3 marque des points</button>
+    <button class="btn secondary" onclick="chooseMode('party')">🏆 Mode Soirée — l'hôte gère tout, tournoi à plusieurs</button>
     <button class="btn secondary" onclick="chooseMode('king')">👑 Roi de la colline — un roi affronte des challengers</button>
 
-    <details class="settings" ${state.apiSettingsOpen?'open':''} ontoggle="state.apiSettingsOpen=this.open;">
-      <summary>Réglages recherche musicale (optionnel)${hasSavedKeys?' — clés enregistrées ✓':''}</summary>
-      <p class="settings-hint">Sans clé, tu peux toujours coller un lien YouTube ou Spotify directement à chaque round. Avec une clé, tu peux taper le nom d'un titre et choisir dans les résultats, comme un lecteur intégré. Valables pour les 3 modes.</p>
+    <details class="settings" ${state.homeSettingsOpen?'open':''} ontoggle="state.homeSettingsOpen=this.open;">
+      <summary>⚙️ Réglages (optionnel)</summary>
+      <p class="settings-hint">Tout ce qui est réglé ici est sauvegardé dans ce navigateur et valable pour les 3 modes de jeu.</p>
+
+      <h3 style="margin-top:18px;">🔑 Recherche musicale${hasSavedKeys?' — clés enregistrées ✓':''}</h3>
+      <p class="settings-hint">Sans clé, tu peux toujours coller un lien YouTube ou Spotify directement à chaque round. Avec une clé, tu peux taper le nom d'un titre et choisir dans les résultats, comme un lecteur intégré.</p>
       <label>Clé API YouTube Data v3</label>
       <input type="text" id="ytApiKey" placeholder="Depuis Google Cloud Console" value="${escapeHtml(state.apiKeys.youtube)}" oninput="state.apiKeys.youtube=this.value; saveApiKeys();">
       <label>Spotify Client ID</label>
@@ -337,14 +386,34 @@ function renderModeSelect(){
       <input type="text" id="spClientSecret" placeholder="Depuis developer.spotify.com" value="${escapeHtml(state.apiKeys.spotifySecret)}" oninput="state.apiKeys.spotifySecret=this.value; state.spotifyToken=null; saveApiKeys();">
       <p class="settings-hint">Ces clés restent uniquement dans ce navigateur (mémoire locale de ton appareil) — jamais écrites dans ce fichier, jamais envoyées ailleurs qu'à YouTube/Spotify directement.</p>
       ${hasSavedKeys ? `<button class="btn secondary small" onclick="forgetApiKeys()">Oublier mes clés sur cet appareil</button>` : ''}
-    </details>
 
-    <details class="settings" ${state.libraryOpen?'open':''} ontoggle="state.libraryOpen=this.open;">
-      <summary>🎵 Bibliothèque de fichiers locaux (optionnel)${state.localLibrary.length?` — ${state.localLibrary.length} fichier${state.localLibrary.length>1?'s':''}`:''}</summary>
-      <p class="settings-hint">Ajoute ici les morceaux (MP3, WAV...) d'artistes locaux ou inédits en une fois — tu pourras ensuite les rechercher directement à chaque round au lieu de re-sélectionner un fichier à chaque fois. Valable pour les 3 modes, mais uniquement pour cette session de navigateur (les fichiers sont perdus si tu recharges la page).</p>
+      <h3 style="margin-top:22px;">🎵 Bibliothèque de fichiers locaux${state.localLibrary.length?` — ${state.localLibrary.length} fichier${state.localLibrary.length>1?'s':''}`:''}</h3>
+      <p class="settings-hint">Ajoute ici les morceaux (MP3, WAV...) d'artistes locaux ou inédits en une fois — tu pourras ensuite les rechercher directement à chaque round au lieu de re-sélectionner un fichier à chaque fois. Uniquement pour cette session de navigateur (les fichiers sont perdus si tu recharges la page).</p>
       <label>Ajouter des fichiers</label>
       <input type="file" accept="audio/*" multiple id="libraryFileInput" onchange="addToLibrary(this)">
       <div style="margin-top:12px;">${renderLibraryChipsHtml()}</div>
+
+      <h3 style="margin-top:22px;">🎯 Thèmes de la roue${state.themesLibrary.length?` — ${state.themesLibrary.length} thème${state.themesLibrary.length>1?'s':''}`:''}</h3>
+      <p class="settings-hint">Ajoute ici tes défis une bonne fois pour toutes : "moins de 500k vues YouTube", "artiste de moins de 20 ans", "sorti avant 2005"... à réutiliser partie après partie sans tout retaper.</p>
+      <div class="row">
+        <input type="text" id="themeLibInput" placeholder="Ex : artiste solo" style="flex:1;" ${state.themesLibrary.length>=THEMES_MAX?'disabled':''} onkeydown="if(event.key==='Enter'){event.preventDefault();addLibraryTheme();}">
+      </div>
+      <button class="btn secondary" ${state.themesLibrary.length>=THEMES_MAX?'disabled':''} onclick="addLibraryTheme()">+ Ajouter le thème</button>
+
+      <details class="settings" ${state.themesLibraryBulkOpen?'open':''} ontoggle="state.themesLibraryBulkOpen=this.open;">
+        <summary>Coller une liste de thèmes</summary>
+        <p class="settings-hint">Un thème par ligne (ou séparés par des virgules). Les doublons et les lignes vides sont ignorés.</p>
+        <textarea id="themeLibBulkInput" rows="4" placeholder="artiste solo${String.fromCharCode(10)}moins de 500k vues YouTube${String.fromCharCode(10)}sorti avant 2005" oninput="state.themesLibraryBulkDraft=this.value;">${escapeHtml(state.themesLibraryBulkDraft||'')}</textarea>
+        <button class="btn secondary" onclick="importLibraryThemes()">Importer la liste</button>
+        <div id="importLibMsg"></div>
+      </details>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+        <h3 style="margin:0;">Thèmes enregistrés</h3>
+        <span style="font-size:12.5px; color:${state.themesLibrary.length>=THEMES_MAX?'var(--danger)':'var(--muted)'}; font-weight:700;">${state.themesLibrary.length} / ${THEMES_MAX}</span>
+      </div>
+      <div style="margin-top:8px;">${renderThemesLibraryChipsHtml()}</div>
+      ${state.themesLibrary.length<2?'<div class="settings-hint">Ajoute au moins 2 thèmes pour pouvoir activer la roue dans les réglages de partie.</div>':''}
     </details>
   </div>`;
 }
@@ -365,7 +434,7 @@ function addToLibrary(input){
 function removeFromLibrary(i){ state.localLibrary.splice(i,1); render(); }
 function chooseMode(mode){
   state.gameMode = mode;
-  state.screen = mode==='duel' ? 'setup' : mode==='party' ? 'partySetup' : 'kingSetup';
+  state.screen = mode==='battle' ? 'battleSetup' : mode==='party' ? 'partySetup' : 'kingSetup';
   render();
 }
 function isHostManaged(){ return state.gameMode==='party' || state.gameMode==='king'; }
@@ -377,8 +446,10 @@ function sourceLabel(src){
 function renderGameSettingsDetails(opts){
   opts = opts || {};
   const roundsLabel = opts.roundsLabel || 'Nombre de rounds';
-  const wheelSub = opts.wheelSub || 'Tire une contrainte au début de chaque round';
-  const wheelDisabled = !!opts.wheelDisabled;
+  const notEnoughThemes = state.themesLibrary.length<2;
+  const wheelSub = opts.wheelDisabled ? (opts.wheelSub || 'Tire une contrainte au début de chaque round')
+    : (notEnoughThemes ? "Ajoute au moins 2 thèmes dans la bibliothèque de l'écran d'accueil pour l'activer" : (opts.wheelSub || 'Tire une contrainte au début de chaque round'));
+  const wheelDisabled = !!opts.wheelDisabled || notEnoughThemes;
   const src = state.submitSource;
   const roundsBlock = opts.kingHill ? `
     <label>Rounds pour devenir grand vainqueur de la colline</label>
@@ -403,10 +474,18 @@ function renderGameSettingsDetails(opts){
       <button onclick="adjustRounds(2)">+</button>
     </div>
   `;
+  const artistToggleBlock = opts.partyArtist ? `
+    <div class="toggle-row">
+      <div><div class="label">Tournoi par artiste</div><div class="sub">Chaque participant ne soumet que des morceaux de son artiste attribué — désactive la roue</div></div>
+      <label class="switch"><input type="checkbox" ${state.party.artistMode?'checked':''} onchange="toggleArtistMode(this.checked)"><span class="slider"></span></label>
+    </div>
+  ` : '';
   return `<details class="settings" ${state.gameSettingsOpen?'open':''} ontoggle="state.gameSettingsOpen=this.open;">
     <summary>Réglages de partie</summary>
 
     ${roundsBlock}
+
+    ${artistToggleBlock}
 
     <div class="toggle-row">
       <div><div class="label">Roue à thèmes</div><div class="sub">${wheelSub}</div></div>
@@ -452,81 +531,363 @@ function setGameMusicSource(src){
   render();
 }
 
-/* ---------- SETUP ---------- */
-function renderSetup(){
+/* ---------- BATTLE ROYALE (2 à 10 joueurs, vote classé top 3) ---------- */
+function renderBattleSetup(){
+  const b = state.battle;
+  const chips = b.players.map((p,i)=>`
+    <div class="chip"><span>${escapeHtml(p.name)}</span><button onclick="removeBattlePlayer(${i})">✕</button></div>
+  `).join('') || `<div class="theme-empty">Aucun joueur ajouté pour l'instant</div>`;
+  const atMax = b.players.length>=10;
+  const ballotSize = Math.min(3, Math.max(b.players.length,2));
   return `<div class="card">
-    <h1>Configurer la partie</h1>
-    <p>Réglages avant de lancer l'affrontement. Le nombre de rounds doit être impair pour désigner un vainqueur.</p>
+    <h1>Battle Royale — configuration</h1>
+    <p>De 2 à 10 joueurs. Chacun soumet un morceau à tour de rôle (en aveugle), puis tout le monde vote pour son top ${ballotSize} (pas son propre morceau) : 3 points pour le 1er choix, 2 pour le 2e, 1 pour le 3e. Le plus de points remporte le round.</p>
 
-    <label>Nom du Joueur 1</label>
-    <input type="text" id="p1Name" value="${escapeHtml(state.p1Name)}" oninput="state.p1Name=this.value;">
+    <label>Nom du joueur</label>
+    <input type="text" id="battlePlayerInput" placeholder="Ex : Louis" ${atMax?'disabled':''} onkeydown="if(event.key==='Enter'){event.preventDefault();addBattlePlayer();}">
+    <button class="btn secondary" ${atMax?'disabled':''} onclick="addBattlePlayer()">+ Ajouter le joueur</button>
+    ${atMax?'<div class="error-text">Maximum 10 joueurs.</div>':''}
 
-    <label>Nom du Joueur 2</label>
-    <input type="text" id="p2Name" value="${escapeHtml(state.p2Name)}" oninput="state.p2Name=this.value;">
+    <div style="margin-top:14px;">${chips}</div>
 
     ${renderGameSettingsDetails({roundsLabel:'Nombre de rounds'})}
 
-    <button class="btn" onclick="startSetup()">Continuer</button>
+    <button class="btn" ${b.players.length<2?'disabled':''} onclick="startBattle()">Lancer la battle royale (${b.players.length} joueur${b.players.length>1?'s':''})</button>
+    ${b.players.length<2?'<div class="error-text">Ajoute au moins 2 joueurs.</div>':''}
   </div>`;
 }
-function startSetup(){
-  state.p1Name = (state.p1Name||'').trim() || 'Joueur 1';
-  state.p2Name = (state.p2Name||'').trim() || 'Joueur 2';
-  if(state.wheelEnabled){
-    state.screen = 'wheelConfig';
+function addBattlePlayer(){
+  if(state.battle.players.length>=10) return;
+  const input = document.getElementById('battlePlayerInput');
+  const name = input.value.trim();
+  if(!name) return;
+  state.battle.players.push({name});
+  input.value = '';
+  render();
+}
+function removeBattlePlayer(i){ state.battle.players.splice(i,1); render(); }
+function startBattle(){
+  const b = state.battle;
+  if(b.players.length<2) return;
+  b.scores = b.players.map(()=>0);
+  state.round = 1; state.history = [];
+  if(state.wheelEnabled) primeThemesPoolFromLibrary();
+  beginBattleRound();
+}
+function beginBattleRound(){
+  const b = state.battle;
+  state.currentTheme = null;
+  b.submissions = b.players.map(()=>null);
+  b.submitOrder = b.players.map((_,i)=>i);
+  b.submitStep = 0;
+  b.playbackOrder = [];
+  b.playbackIndex = 0;
+  b.ballot = [];
+  b.ballotLocked = false;
+  b.roundPoints = b.players.map(()=>0);
+  b.totalBallots = 0;
+  b.hostPickOpen = false;
+  state.screen = state.wheelEnabled && state.themesPool.length>=2 ? 'wheelSpin' : 'battleHandoff';
+  render();
+}
+
+/* ---------- BATTLE ROYALE — soumission (tour par tour, en aveugle) ---------- */
+function renderBattleHandoff(){
+  const b = state.battle;
+  const playerIdx = b.submitOrder[b.submitStep];
+  const name = b.players[playerIdx].name;
+  return `<div class="card handoff">
+    ${battleHeaderBar()}
+    <div class="avatar">📱</div>
+    <p>Passe l'appareil à</p>
+    <div class="player-tag p1">${escapeHtml(name)}</div>
+    <p>Les autres ne doivent pas regarder l'écran — la soumission est en aveugle. (${b.submitStep+1} / ${b.players.length})</p>
+    <button class="btn" onclick="goToBattleSubmit()">C'est bon, je suis prêt·e</button>
+  </div>`;
+}
+function goToBattleSubmit(){
+  state.screen='battleSubmit';
+  const src = state.submitSource;
+  if(src==='local'){
+    state.submitMode = state.localLibrary.length ? 'library' : 'newfile';
   } else {
-    beginRound();
+    state.submitMode = (src==='youtube' ? !!state.apiKeys.youtube : !!(state.apiKeys.spotifyId && state.apiKeys.spotifySecret)) ? 'search' : 'link';
+  }
+  state.searchQuery=''; state.searchResults=[]; state.searchLoading=false; state.searchError=''; state.selectedTrack=null; state.localLibraryQuery='';
+  render();
+  startTimerIfEnabled();
+}
+function renderBattleSubmit(){
+  const b = state.battle;
+  const playerIdx = b.submitOrder[b.submitStep];
+  const name = b.players[playerIdx].name;
+  return `<div class="card">
+    ${battleHeaderBar()}
+    <div class="player-tag p1">${escapeHtml(name)}</div>
+    <h2>Soumets ton morceau</h2>
+    ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : `<p>Pas de thème ce round — carte blanche.</p>`}
+    ${state.timerEnabled ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+    ${renderSubmissionFormBodyHtml('submitBattleSong')}
+  </div>`;
+}
+function submitBattleSong(){
+  const b = state.battle;
+  const playerIdx = b.submitOrder[b.submitStep];
+
+  if(state.selectedTrack){
+    const t = state.selectedTrack;
+    stopTimer();
+    b.submissions[playerIdx] = {source:t.source, id:t.id, url:null, title:t.title, thumbnail:t.thumbnail};
+    advanceAfterBattleSubmit();
+    return;
+  }
+
+  const urlInput = document.getElementById('trackUrl');
+  const url = urlInput ? urlInput.value.trim() : '';
+  const src = state.submitSource;
+  const id = src==='youtube' ? extractYouTubeId(url) : extractSpotifyId(url);
+  if(!id){
+    const err = document.getElementById('urlError');
+    if(err) err.style.display='block';
+    return;
+  }
+  stopTimer();
+  b.submissions[playerIdx] = {source:src, id, url, title:null, thumbnail:null};
+  fetchTitle(src, url).then(title=>{
+    if(b.submissions[playerIdx]) b.submissions[playerIdx].title = title;
+  });
+  advanceAfterBattleSubmit();
+}
+function advanceAfterBattleSubmit(){
+  const b = state.battle;
+  b.submitStep++;
+  if(b.submitStep < b.submitOrder.length){
+    state.screen='battleHandoff';
+  } else {
+    b.playbackOrder = shuffleArr(b.players.map((_,i)=>i));
+    b.playbackIndex = 0;
+    state.screen='battlePlayback';
   }
   render();
 }
+function forfeitCurrentBattlePlayer(){
+  const b = state.battle;
+  const playerIdx = b.submitOrder[b.submitStep];
+  b.submissions[playerIdx] = {source:null, id:null, url:null, title:'Forfait', thumbnail:null};
+  advanceAfterBattleSubmit();
+}
 
-/* ---------- WHEEL CONFIG ---------- */
-const THEMES_MAX = 50;
-function renderWheelConfig(){
-  const items = state.themesPool.map((t,i)=>`
-    <div class="chip"><span>${escapeHtml(t)}</span><button onclick="removeTheme(${i})">✕</button></div>
-  `).join('') || `<div class="theme-empty">Aucun thème ajouté pour l'instant</div>`;
-  const atMax = state.themesPool.length >= THEMES_MAX;
+/* ---------- BATTLE ROYALE — écoute progressive ---------- */
+function renderBattlePlayback(){
+  const b = state.battle;
+  const idx = b.playbackIndex || 0;
+  const playerIdx = b.playbackOrder[idx];
+  const label = 'Morceau ' + String.fromCharCode(65+idx);
+  const sub = b.submissions[playerIdx];
+  const isLast = idx >= b.playbackOrder.length - 1;
   return `<div class="card">
-    <h1>Remplir la roue à thèmes</h1>
-    <p>Ajoutez des défis pour pimenter les rounds : "moins de 500k vues YouTube", "artiste de moins de 20 ans", "sorti avant 2005"...</p>
-    <div class="row">
-      <input type="text" id="themeInput" placeholder="Ex : artiste solo" value="${escapeHtml(state.themesDraftInput)}" style="flex:1;" ${atMax?'disabled':''} onkeydown="if(event.key==='Enter'){event.preventDefault();addTheme();}">
-    </div>
-    <button class="btn secondary" ${atMax?'disabled':''} onclick="addTheme()">+ Ajouter le thème</button>
-
-    <details class="settings" ${state.wheelBulkOpen?'open':''} ontoggle="state.wheelBulkOpen=this.open;">
-      <summary>Coller une liste de thèmes</summary>
-      <p class="settings-hint">Un thème par ligne (ou séparés par des virgules). Les doublons et les lignes vides sont ignorés.</p>
-      <textarea id="themeBulkInput" rows="4" placeholder="artiste solo${String.fromCharCode(10)}moins de 500k vues YouTube${String.fromCharCode(10)}sorti avant 2005" oninput="state.wheelBulkDraft=this.value;">${escapeHtml(state.wheelBulkDraft||'')}</textarea>
-      <button class="btn secondary" onclick="importThemes()">Importer la liste</button>
-      <div id="importMsg"></div>
-    </details>
-
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
-      <h3 style="margin:0;">Thèmes</h3>
-      <span style="font-size:12.5px; color:${atMax?'var(--danger)':'var(--muted)'}; font-weight:700;">${state.themesPool.length} / ${THEMES_MAX}</span>
-    </div>
-    <div style="margin-top:8px;">${items}</div>
-    <button class="btn" ${state.themesPool.length<2?'disabled':''} onclick="proceedFromWheelConfig()">${state.gameMode==='party' ? `Valider la roue (${state.themesPool.length} thèmes)` : `Lancer la partie (${state.themesPool.length} thèmes)`}</button>
-    ${state.themesPool.length<2?'<div class="error-text">Ajoute au moins 2 thèmes pour pouvoir faire tourner la roue.</div>':''}
+    ${battleHeaderBar()}
+    <h2>Écoute des morceaux</h2>
+    <div class="playback-progress">Morceau ${idx+1} / ${b.playbackOrder.length}</div>
+    <p>Révélation progressive : un morceau à la fois, anonymisé, pour garder l'attention sur chacun avant de voter.</p>
+    ${submissionMediaCardHtml(sub, label)}
+    <button class="btn" onclick="${isLast ? 'goToBattleVote()' : 'nextBattlePlaybackTrack()'}">${isLast ? 'Ouvrir le vote' : 'Morceau suivant →'}</button>
   </div>`;
 }
-function proceedFromWheelConfig(){
-  if(state.gameMode==='party'){ state.screen='bracketView'; render(); }
-  else if(state.gameMode==='king'){ state.screen='kingView'; render(); }
-  else { beginRound(); }
+function nextBattlePlaybackTrack(){ state.battle.playbackIndex = (state.battle.playbackIndex||0)+1; render(); }
+function goToBattleVote(){ state.screen='battleVote'; render(); }
+
+/* ---------- BATTLE ROYALE — vote classé (top 3 : 3/2/1 points) ---------- */
+function renderBattleVote(){
+  const b = state.battle;
+  const order = b.playbackOrder;
+  const ballotSize = Math.min(3, order.length);
+  const rankLabels = ['🥇 1er','🥈 2e','🥉 3e'];
+  const rows = order.map((playerIdx,i)=>{
+    const label = String.fromCharCode(65+i);
+    const sub = b.submissions[playerIdx];
+    const rankPos = b.ballot.indexOf(i);
+    return `<div class="search-item ${rankPos>=0?'selected':''}" onclick="tapBattleVote(${i})">
+      <div class="meta"><div class="t">Morceau ${label}</div>${sub && sub.title ? `<div class="s">${escapeHtml(sub.title)}</div>` : ''}</div>
+      ${rankPos>=0 ? `<span style="font-weight:800; font-size:13px; flex:none;">${rankLabels[rankPos]}</span>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="card">
+    ${battleHeaderBar()}
+    <h2>Vote — ton top ${ballotSize}</h2>
+    <p>Fais passer le téléphone : chaque personne clique dans l'ordre sur son ${ballotSize===3?'1er, 2e puis 3e':'1er puis 2e'} morceau préféré (pas le sien !). Le classement se valide automatiquement une fois complet.</p>
+    <div class="search-list">${rows}</div>
+    <button class="btn secondary small" onclick="resetBattleBallot()">Réinitialiser mon choix</button>
+    <div class="vote-feedback" id="voteFeedback"></div>
+
+    <div class="vote-count-note">🗳️ ${b.totalBallots} vote${b.totalBallots>1?'s':''} enregistré${b.totalBallots>1?'s':''} au total — détail caché jusqu'à la clôture</div>
+
+    <button class="btn" onclick="closeBattleVote()">Clôturer le vote et révéler le résultat</button>
+
+    <details class="settings" ${b.hostPickOpen?'open':''} ontoggle="state.battle.hostPickOpen=this.open;">
+      <summary>👑 Option hôte — trancher directement</summary>
+      <p class="settings-hint">Choisis toi-même le podium du round. Ça clôture le vote immédiatement (remplace les votes déjà comptés).</p>
+      ${renderHostBattlePickerHtml()}
+    </details>
+  </div>`;
 }
-function addTheme(){
-  if(state.themesPool.length >= THEMES_MAX) return;
-  const input = document.getElementById('themeInput');
-  const val = input.value.trim();
-  if(val && !state.themesPool.includes(val)){ state.themesPool.push(val); state.themesDraftInput=''; }
+function tapBattleVote(slotIndex){
+  const b = state.battle;
+  if(b.ballotLocked) return;
+  const ballotSize = Math.min(3, b.playbackOrder.length);
+  if(b.ballot.includes(slotIndex)){
+    b.ballot = b.ballot.filter(x=>x!==slotIndex);
+    render();
+    return;
+  }
+  if(b.ballot.length>=ballotSize) return;
+  b.ballot.push(slotIndex);
+  render();
+  if(b.ballot.length===ballotSize){
+    b.ballotLocked = true;
+    const points = ballotSize===3 ? [3,2,1] : [3,2];
+    b.ballot.forEach((slot,rank)=>{
+      const playerIdx = b.playbackOrder[slot];
+      b.roundPoints[playerIdx] += points[rank];
+    });
+    b.totalBallots++;
+    const fb = document.getElementById('voteFeedback');
+    if(fb){ fb.textContent = '✓ Merci ! Passe le téléphone à la personne suivante.'; fb.style.opacity = '1'; }
+    setTimeout(()=>{ b.ballot=[]; b.ballotLocked=false; render(); }, 700);
+  }
+}
+function resetBattleBallot(){
+  if(state.battle.ballotLocked) return;
+  state.battle.ballot=[];
   render();
 }
-function removeTheme(i){ state.themesPool.splice(i,1); render(); }
-function importThemes(){
-  const textarea = document.getElementById('themeBulkInput');
+function renderHostBattlePickerHtml(){
+  const b = state.battle;
+  const options = b.playbackOrder.map((playerIdx,i)=>{
+    const label = String.fromCharCode(65+i);
+    const sub = b.submissions[playerIdx];
+    const title = sub && sub.title ? ' — '+sub.title : '';
+    return `<option value="${i}">Morceau ${label}${escapeHtml(title)}</option>`;
+  }).join('');
+  const ballotSize = Math.min(3, b.playbackOrder.length);
+  const labels = ['1ère place (3 pts)','2e place (2 pts)','3e place (1 pt)'].slice(0, ballotSize);
+  const selects = labels.map((lbl,i)=>`
+    <label>${lbl}</label>
+    <select id="hostPodium${i}"><option value="">—</option>${options}</select>
+  `).join('');
+  return `${selects}<button class="btn secondary" style="margin-top:10px;" onclick="hostPickBattlePodium()">Valider le podium</button>`;
+}
+function hostPickBattlePodium(){
+  const b = state.battle;
+  const ballotSize = Math.min(3, b.playbackOrder.length);
+  const picks = [];
+  for(let i=0;i<ballotSize;i++){
+    const sel = document.getElementById('hostPodium'+i);
+    const v = sel ? sel.value : '';
+    if(v===''){ alert('Choisis un morceau pour chaque place du podium.'); return; }
+    picks.push(parseInt(v,10));
+  }
+  if(new Set(picks).size !== picks.length){ alert('Chaque place du podium doit avoir un morceau différent.'); return; }
+  b.roundPoints = b.players.map(()=>0);
+  const points = ballotSize===3 ? [3,2,1] : [3,2];
+  picks.forEach((slot,rank)=>{
+    const playerIdx = b.playbackOrder[slot];
+    b.roundPoints[playerIdx] += points[rank];
+  });
+  closeBattleVote();
+}
+function closeBattleVote(){ state.screen='battleResult'; render(); }
+
+/* ---------- BATTLE ROYALE — résultat du round ---------- */
+function renderBattleResult(){
+  const b = state.battle;
+  const maxPoints = Math.max(...b.roundPoints);
+  const winners = b.roundPoints.map((p,i)=>p===maxPoints?i:-1).filter(i=>i>=0);
+  const isTie = maxPoints===0 || winners.length>1;
+  if(!isTie) b.scores[winners[0]]++;
+  const winnerName = !isTie ? b.players[winners[0]].name
+    : (maxPoints===0 ? 'Aucun vote exploitable — le round va être rejoué' : 'Égalité parfaite — le round va être rejoué');
+
+  const ranked = b.playbackOrder.map((playerIdx,slot)=>({playerIdx, slot, points:b.roundPoints[playerIdx]}))
+    .sort((x,y)=>y.points-x.points);
+  const reveals = ranked.map(r=>{
+    const label = String.fromCharCode(65+r.slot);
+    const sub = b.submissions[r.playerIdx];
+    const won = !isTie && r.playerIdx===winners[0];
+    return `<div class="video-card" style="${won?'border-color:var(--success);':''}">
+      <div class="tag">Morceau ${label} — ${escapeHtml(b.players[r.playerIdx].name)} ${won?'🏆':''}</div>
+      <div style="font-weight:700; font-size:14px;">${escapeHtml(sub && sub.title ? sub.title : (sub && sub.url ? '(titre en cours de récupération...)' : 'Aucune soumission'))}</div>
+      <div style="font-size:12.5px; color:var(--muted); margin-top:4px;">${r.points} point${r.points>1?'s':''} ce round</div>
+    </div>`;
+  }).join('');
+
+  const majority = Math.ceil(state.totalRounds/2);
+  const gameDecided = !isTie && b.scores[winners[0]]>=majority;
+  const isLastRound = !isTie && state.round>=state.totalRounds;
+
+  if(!isTie) state.history.push({round:state.round, theme:state.currentTheme, winner:winnerName});
+
+  const outcome = isTie ? 'tie' : ((gameDecided || isLastRound) ? 'over' : 'continue');
+  const btnLabel = isTie ? '🔁 Rejouer ce round' : ((gameDecided || isLastRound) ? 'Voir le résultat final' : 'Round suivant');
+
+  return `<div class="card">
+    ${battleHeaderBar()}
+    <div class="result-winner">
+      <div class="big">${!isTie?'🏆':'🤝'}</div>
+      <div class="name">${escapeHtml(winnerName)}</div>
+    </div>
+    ${reveals}
+    <button class="btn" onclick="afterBattleResult('${outcome}')">${btnLabel}</button>
+  </div>`;
+}
+function afterBattleResult(outcome){
+  if(outcome==='tie'){ beginBattleRound(); return; }
+  if(outcome==='over'){ state.screen='battleGameOver'; render(); return; }
+  state.round++;
+  beginBattleRound();
+}
+function renderBattleGameOver(){
+  const b = state.battle;
+  const maxScore = Math.max(...b.scores);
+  const champions = b.players.filter((p,i)=>b.scores[i]===maxScore).map(p=>p.name);
+  const winnerName = champions.length>1 ? champions.join(' & ')+' (égalité)' : champions[0];
+  const leaderboard = b.players.map((p,i)=>({name:p.name, score:b.scores[i]}))
+    .sort((x,y)=>y.score-x.score)
+    .map((row,i)=>`<div class="recap-item"><span>${i+1}. ${escapeHtml(row.name)}</span><b>${row.score} pt${row.score>1?'s':''}</b></div>`).join('');
+  const recap = state.history.map(h=>`
+    <div class="recap-item"><span>Round ${h.round}${h.theme?' — '+escapeHtml(h.theme):''}</span><b>${escapeHtml(h.winner)}</b></div>
+  `).join('');
+  return `<div class="card">
+    <h1 style="text-align:center;">🏆 ${escapeHtml(winnerName)} remporte la battle royale !</h1>
+    <h3>Classement final</h3>
+    ${leaderboard}
+    <h3 style="margin-top:16px;">Récap des rounds</h3>
+    ${recap}
+    <button class="btn" onclick="resetGame()">Rejouer</button>
+  </div>`;
+}
+
+/* ---------- BIBLIOTHÈQUE DE THÈMES DE LA ROUE (écran d'accueil, sauvegardée) ---------- */
+const THEMES_MAX = 50;
+function renderThemesLibraryChipsHtml(){
+  return state.themesLibrary.map((t,i)=>`
+    <div class="chip"><span>${escapeHtml(t)}</span><button onclick="removeLibraryTheme(${i})">✕</button></div>
+  `).join('') || `<div class="theme-empty">Aucun thème ajouté pour l'instant</div>`;
+}
+function addLibraryTheme(){
+  if(state.themesLibrary.length >= THEMES_MAX) return;
+  const input = document.getElementById('themeLibInput');
+  const val = input.value.trim();
+  if(val && !state.themesLibrary.includes(val)){
+    state.themesLibrary.push(val);
+    saveThemesLibrary();
+    input.value = '';
+  }
+  render();
+}
+function removeLibraryTheme(i){ state.themesLibrary.splice(i,1); saveThemesLibrary(); render(); }
+function importLibraryThemes(){
+  const textarea = document.getElementById('themeLibBulkInput');
   const raw = textarea.value;
   let parts = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   if(parts.length<=1){
@@ -534,19 +895,25 @@ function importThemes(){
   }
   let added = 0, skippedDupe = 0, skippedMax = 0;
   for(const p of parts){
-    if(state.themesPool.length >= THEMES_MAX){ skippedMax++; continue; }
-    if(state.themesPool.includes(p)){ skippedDupe++; continue; }
-    state.themesPool.push(p);
+    if(state.themesLibrary.length >= THEMES_MAX){ skippedMax++; continue; }
+    if(state.themesLibrary.includes(p)){ skippedDupe++; continue; }
+    state.themesLibrary.push(p);
     added++;
   }
-  state.wheelBulkDraft = '';
+  state.themesLibraryBulkDraft = '';
+  saveThemesLibrary();
   const msgs = [];
   if(added) msgs.push(`${added} thème${added>1?'s':''} ajouté${added>1?'s':''}`);
   if(skippedDupe) msgs.push(`${skippedDupe} doublon${skippedDupe>1?'s':''} ignoré${skippedDupe>1?'s':''}`);
   if(skippedMax) msgs.push(`${skippedMax} ignoré${skippedMax>1?'s':''} (limite de ${THEMES_MAX} atteinte)`);
   render();
-  const box = document.getElementById('importMsg');
+  const box = document.getElementById('importLibMsg');
   if(box) box.innerHTML = `<div class="settings-hint" style="margin-top:8px;">${msgs.join(' — ') || 'Aucun thème valide trouvé.'}</div>`;
+}
+// Copie la bibliothèque sauvegardée dans le pool de travail de la partie en cours (la roue "consomme"
+// les thèmes au fil des rounds sans jamais toucher à la bibliothèque persistée).
+function primeThemesPoolFromLibrary(){
+  state.themesPool = shuffleArr(state.themesLibrary);
 }
 
 /* ---------- MODE SOIRÉE (hôte, plusieurs participants) ---------- */
@@ -568,15 +935,11 @@ function renderPartySetup(){
 
     <div style="margin-top:14px;">${chips}</div>
 
-    <div class="toggle-row">
-      <div><div class="label">Tournoi par artiste</div><div class="sub">Chaque participant ne soumet que des morceaux de son artiste attribué — désactive la roue</div></div>
-      <label class="switch"><input type="checkbox" ${p.artistMode?'checked':''} onchange="toggleArtistMode(this.checked)"><span class="slider"></span></label>
-    </div>
-
     ${renderGameSettingsDetails({
       roundsLabel:'Rounds par match',
       wheelDisabled:p.artistMode,
-      wheelSub: p.artistMode?'Désactivée en mode tournoi par artiste':'Tire une contrainte au début de chaque round'
+      wheelSub: p.artistMode?'Désactivée en mode tournoi par artiste':'Tire une contrainte au début de chaque round',
+      partyArtist:true
     })}
 
     <button class="btn" ${p.participants.length<2 || artistMissing ?'disabled':''} onclick="generateBracket()">Générer la grille (${p.participants.length} participants)</button>
@@ -612,11 +975,8 @@ function generateBracket(){
   if(p.participants.length<2) return;
   if(p.artistMode && p.participants.some(x=>!x.artist)) return;
   buildBracket();
-  if(state.wheelEnabled && !p.artistMode){
-    state.screen='wheelConfig';
-  } else {
-    state.screen='bracketView';
-  }
+  if(state.wheelEnabled && !p.artistMode) primeThemesPoolFromLibrary();
+  state.screen='bracketView';
   render();
 }
 function buildBracket(){
@@ -866,7 +1226,8 @@ function startKingHill(){
   if(state.king.queue.length<1) return;
   state.king.kingIdx = 0;
   state.king.streak = 0;
-  state.screen = state.wheelEnabled ? 'wheelConfig' : 'kingView';
+  if(state.wheelEnabled) primeThemesPoolFromLibrary();
+  state.screen = 'kingView';
   render();
 }
 function renderKingView(){
@@ -977,7 +1338,7 @@ function beginRound(){
   state.votes = {A:0,B:0};
   state.playbackIndex = 0;
   state.hostPickOpen = false;
-  state.screen = state.wheelEnabled && state.themesPool.length>0 ? 'wheelSpin' : 'handoff';
+  state.screen = state.wheelEnabled && state.themesPool.length>=2 ? 'wheelSpin' : 'handoff';
   render();
 }
 
@@ -990,7 +1351,7 @@ function renderWheelSpin(){
     return `${c} ${i*seg}deg ${(i+1)*seg}deg`;
   }).join(', ');
   return `<div class="card">
-    ${headerBar()}
+    ${state.gameMode==='battle' ? battleHeaderBar() : headerBar()}
     <h2 style="text-align:center;">La roue tourne...</h2>
     <p style="text-align:center;">Le thème imposé pour ce round va être tiré au sort.</p>
     <div class="wheel-wrap">
@@ -1022,8 +1383,8 @@ function spinWheel(){
     document.getElementById('spinBtn').outerHTML = `<button class="btn" onclick="proceedAfterWheel()">Continuer</button>`;
   }, 4100);
 }
-function skipWheel(){ state.currentTheme=null; state.screen='handoff'; render(); }
-function proceedAfterWheel(){ state.screen='handoff'; render(); }
+function skipWheel(){ state.currentTheme=null; state.screen = state.gameMode==='battle' ? 'battleHandoff' : 'handoff'; render(); }
+function proceedAfterWheel(){ state.screen = state.gameMode==='battle' ? 'battleHandoff' : 'handoff'; render(); }
 
 /* ---------- HANDOFF (blind pick simulation) ---------- */
 function renderHandoff(){
@@ -1050,7 +1411,6 @@ function goToSubmit(){
     state.submitMode = (src==='youtube' ? !!state.apiKeys.youtube : !!(state.apiKeys.spotifyId && state.apiKeys.spotifySecret)) ? 'search' : 'link';
   }
   state.searchQuery=''; state.searchResults=[]; state.searchLoading=false; state.searchError=''; state.selectedTrack=null; state.localLibraryQuery='';
-  state.commentDraft='';
   render();
   startTimerIfEnabled();
 }
@@ -1060,9 +1420,23 @@ function renderSubmit(){
   const isP1 = state.submitStage==='p1';
   const name = isP1 ? state.p1Name : state.p2Name;
   const cls = isP1 ? 'p1':'p2';
+  const artists = currentMatchArtists();
+  const artistNote = artists ? `<p><b>🎤 Artiste imposé :</b> ${escapeHtml(isP1?artists.p1:artists.p2)} — le morceau doit être de cet artiste.</p>` : '';
+  return `<div class="card">
+    ${headerBar()}
+    <div class="player-tag ${cls}">${escapeHtml(name)}</div>
+    <h2>${isHostManaged() ? 'Renseigne son morceau' : 'Soumets ton morceau'}</h2>
+    ${artistNote}
+    ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : (artists ? '' : `<p>Pas de thème ce round — carte blanche.</p>`)}
+    ${state.timerEnabled ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+    ${renderSubmissionFormBodyHtml('submitSong')}
+  </div>`;
+}
+// Corps de formulaire de soumission (source figée par la partie, recherche/lien ou bibliothèque/nouveau fichier
+// selon la source) — partagé entre le moteur 1v1 (Soirée/Roi de la colline) et le mode Battle Royale.
+function renderSubmissionFormBodyHtml(onSubmitFnName){
   const src = state.submitSource;
   const mode = state.submitMode;
-
   const selected = state.selectedTrack;
   const selectedHtml = selected ? `
     <div class="selected-track">
@@ -1094,16 +1468,7 @@ function renderSubmit(){
     <div id="libraryResultsBox">${renderLocalLibraryHtml()}</div>
   `;
 
-  const artists = currentMatchArtists();
-  const artistNote = artists ? `<p><b>🎤 Artiste imposé :</b> ${escapeHtml(isP1?artists.p1:artists.p2)} — le morceau doit être de cet artiste.</p>` : '';
-  return `<div class="card">
-    ${headerBar()}
-    <div class="player-tag ${cls}">${escapeHtml(name)}</div>
-    <h2>${isHostManaged() ? 'Renseigne son morceau' : 'Soumets ton morceau'}</h2>
-    ${artistNote}
-    ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : (artists ? '' : `<p>Pas de thème ce round — carte blanche.</p>`)}
-    ${state.timerEnabled ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
-
+  return `
     <div class="round-pill" style="display:inline-flex; margin-bottom:4px;">${sourceLabel(src)}</div>
     ${src!=='local' ? `<div class="seg-toggle">
       <button class="seg-btn ${mode==='search'?'active':''}" onclick="setSubmitMode('search')">🔍 Rechercher</button>
@@ -1115,10 +1480,8 @@ function renderSubmit(){
 
     ${selected ? selectedHtml : (src==='local' ? (mode==='library' ? libraryHtml : fileHtml) : searchHtml)}
 
-    <label>Pourquoi ce choix ? (optionnel)</label>
-    <textarea id="comment" rows="2" placeholder="En rapport avec le thème..." oninput="state.commentDraft=this.value;">${escapeHtml(state.commentDraft||'')}</textarea>
-    <button class="btn" onclick="submitSong()">Valider ma soumission</button>
-  </div>`;
+    <button class="btn" onclick="${onSubmitFnName}()">Valider ma soumission</button>
+  `;
 }
 function previewEmbed(track){
   if(track.source==='youtube'){
@@ -1261,13 +1624,11 @@ function selectSearchResult(i){
 
 function submitSong(){
   const player = state.submitStage;
-  const commentEl = document.getElementById('comment');
-  const comment = commentEl ? commentEl.value.trim() : '';
 
   if(state.selectedTrack){
     const t = state.selectedTrack;
     stopTimer();
-    state.submissions[player] = {source:t.source, id:t.id, url:null, comment, title:t.title, thumbnail:t.thumbnail};
+    state.submissions[player] = {source:t.source, id:t.id, url:null, title:t.title, thumbnail:t.thumbnail};
     advanceAfterSubmit();
     return;
   }
@@ -1283,7 +1644,7 @@ function submitSong(){
     return;
   }
   stopTimer();
-  state.submissions[player] = {source:src, id, url, comment, title:null, thumbnail:null};
+  state.submissions[player] = {source:src, id, url, title:null, thumbnail:null};
   fetchTitle(src, url).then(title=>{
     if(state.submissions[player]) state.submissions[player].title = title;
   });
@@ -1303,7 +1664,7 @@ function advanceAfterSubmit(){
 }
 function forfeitCurrentPlayer(){
   const player = state.submitStage;
-  state.submissions[player] = {source:null, id:null, url:null, comment:'(Aucune soumission — temps écoulé)', title:'Forfait', thumbnail:null};
+  state.submissions[player] = {source:null, id:null, url:null, title:'Forfait', thumbnail:null};
   advanceAfterSubmit();
 }
 
@@ -1321,12 +1682,32 @@ function startTimerIfEnabled(){
     }
     if(state.timerRemaining<=0){
       stopTimer();
-      forfeitCurrentPlayer();
+      if(state.gameMode==='battle') forfeitCurrentBattlePlayer(); else forfeitCurrentPlayer();
     }
   },1000);
 }
 function stopTimer(){ clearInterval(state.timerHandle); state.timerHandle=null; }
 function formatTime(s){ const m=Math.floor(s/60); const sec=String(s%60).padStart(2,'0'); return `${m}:${sec}`; }
+
+// Carte média (YouTube/Spotify/fichier local) pour une soumission — partagée entre le moteur 1v1 et Battle Royale.
+function submissionMediaCardHtml(sub, label){
+  if(!sub || !sub.id){
+    return `<div class="video-card"><div class="tag">${label}</div><p style="margin:0;">Pas de morceau (forfait)</p></div>`;
+  }
+  if(sub.source==='local'){
+    return `<div class="video-card local">
+      <div class="tag">${label} 📁</div>
+      <audio controls src="${sub.id}" style="width:100%;"></audio>
+    </div>`;
+  }
+  const src = sub.source==='spotify'
+    ? `https://open.spotify.com/embed/track/${sub.id}`
+    : `https://www.youtube.com/embed/${sub.id}`;
+  return `<div class="video-card ${sub.source==='spotify'?'spotify':''}">
+    <div class="tag">${label} ${sub.source==='spotify'?'🎧':'🎥'}</div>
+    <iframe src="${src}" allow="encrypted-media" allowfullscreen></iframe>
+  </div>`;
+}
 
 /* ---------- PLAYBACK ---------- */
 function renderPlayback(){
@@ -1336,30 +1717,12 @@ function renderPlayback(){
   const sub = state.submissions[p];
   const isLast = idx >= state.order.length - 1;
 
-  let cardHtml;
-  if(!sub || !sub.id){
-    cardHtml = `<div class="video-card"><div class="tag">${label}</div><p style="margin:0;">Pas de morceau (forfait)</p></div>`;
-  } else if(sub.source==='local'){
-    cardHtml = `<div class="video-card local">
-      <div class="tag">${label} 📁</div>
-      <audio controls src="${sub.id}" style="width:100%;"></audio>
-    </div>`;
-  } else {
-    const src = sub.source==='spotify'
-      ? `https://open.spotify.com/embed/track/${sub.id}`
-      : `https://www.youtube.com/embed/${sub.id}`;
-    cardHtml = `<div class="video-card ${sub.source==='spotify'?'spotify':''}">
-      <div class="tag">${label} ${sub.source==='spotify'?'🎧':'🎥'}</div>
-      <iframe src="${src}" allow="encrypted-media" allowfullscreen></iframe>
-    </div>`;
-  }
-
   return `<div class="card">
     ${headerBar()}
     <h2>Écoute des morceaux</h2>
     <div class="playback-progress">Morceau ${idx+1} / ${state.order.length}</div>
     <p>Révélation progressive : un morceau à la fois, anonymisé, pour garder l'attention sur chacun avant de voter.</p>
-    ${cardHtml}
+    ${submissionMediaCardHtml(sub, label)}
     <button class="btn" onclick="${isLast ? 'goToVote()' : 'nextPlaybackTrack()'}">${isLast ? 'Ouvrir le vote' : 'Morceau suivant →'}</button>
   </div>`;
 }
@@ -1430,7 +1793,6 @@ function renderResult(){
     return `<div class="video-card" style="${won?'border-color:var(--success);':''}">
       <div class="tag">${label} — ${escapeHtml(name)} ${won?'🏆':''}</div>
       <div style="font-weight:700; font-size:14px;">${escapeHtml(sub && sub.title ? sub.title : (sub && sub.url ? '(titre en cours de récupération...)' : 'Aucune soumission'))}</div>
-      ${sub && sub.comment ? `<div style="font-size:12.5px; color:var(--muted); margin-top:4px;">"${escapeHtml(sub.comment)}"</div>` : ''}
     </div>`;
   }).join('');
 
@@ -1496,11 +1858,12 @@ function renderGameOver(){
 }
 function resetGame(){
   Object.assign(state, {
-    screen:'modeSelect', gameMode:'duel', round:1, scoreP1:0, scoreP2:0, currentTheme:null, wheelRotation:0,
+    screen:'modeSelect', gameMode:'battle', round:1, scoreP1:0, scoreP2:0, currentTheme:null, wheelRotation:0,
     submitStage:'p1', submissions:{p1:null,p2:null}, votes:{A:0,B:0}, playbackIndex:0, hostPickOpen:false, history:[],
-    themesPool:[], wheelBulkOpen:false, wheelBulkDraft:'', wheelEnabled:false, gameSettingsOpen:false,
+    themesPool:[], wheelEnabled:false, gameSettingsOpen:false,
     party:{ participants:[], artistMode:false, rounds:[], bracketSize:0, championIdx:null, currentMatch:null },
-    king:{ kingIdx:null, participants:[], queue:[], streak:0, history:[], roundsToWinHill:10, matchFormat:'bo1' }
+    king:{ kingIdx:null, participants:[], queue:[], streak:0, history:[], roundsToWinHill:10, matchFormat:'bo1' },
+    battle:{ players:[], scores:[], submitOrder:[], submitStep:0, submissions:[], playbackOrder:[], playbackIndex:0, ballot:[], ballotLocked:false, roundPoints:[], totalBallots:0, hostPickOpen:false }
   });
   render();
 }
@@ -1569,9 +1932,26 @@ function forgetApiKeys(){
   try{ localStorage.removeItem(API_KEYS_STORAGE_KEY); }catch(e){ /* ignore */ }
   render();
 }
+
+/* ---------- BIBLIOTHÈQUE DE THÈMES DE LA ROUE — mémorisée dans ce navigateur ---------- */
+const THEMES_LIBRARY_STORAGE_KEY = 'musicBattle.wheelThemes';
+function saveThemesLibrary(){
+  try{
+    localStorage.setItem(THEMES_LIBRARY_STORAGE_KEY, JSON.stringify(state.themesLibrary));
+  }catch(e){ /* stockage indisponible — pas grave, juste pas mémorisé */ }
+}
+function loadThemesLibrary(){
+  try{
+    const raw = localStorage.getItem(THEMES_LIBRARY_STORAGE_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(Array.isArray(parsed)) state.themesLibrary = parsed.filter(t=>typeof t==='string');
+    }
+  }catch(e){ /* ignore */ }
+}
 function afterRender(){
-  const t = document.getElementById('themeInput');
-  if(t){ t.oninput = ()=>{ state.themesDraftInput = t.value; }; t.focus(); }
+  const t = document.getElementById('themeLibInput');
+  if(t){ t.focus(); const v=t.value; t.value=''; t.value=v; }
   const s = document.getElementById('searchInput');
   if(s){ s.focus(); const v=s.value; s.value=''; s.value=v; }
   const ls = document.getElementById('libSearchInput');
@@ -1580,11 +1960,14 @@ function afterRender(){
   if(pn){ pn.focus(); }
   const kn = document.getElementById('kingNameInput') || document.getElementById('challengerNameInput') || document.getElementById('challengerNameInput2');
   if(kn){ kn.focus(); }
+  const bp = document.getElementById('battlePlayerInput');
+  if(bp){ bp.focus(); }
   if(state.screen==='bracketView'){ layoutBracket(); }
 }
 window.addEventListener('resize', ()=>{ if(state.screen==='bracketView') layoutBracket(); });
 
 loadApiKeys();
+loadThemesLibrary();
 render();
 </script>
 
