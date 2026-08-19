@@ -219,14 +219,6 @@
 
   .video-card.spotify iframe{ aspect-ratio:auto; height:152px; }
 
-  .yt-custom-player{ width:100%; }
-  .yt-player-frame{ width:100%; aspect-ratio:16/9; border-radius:10px; overflow:hidden; background:#000; }
-  .yt-controls{ display:flex; align-items:center; gap:10px; margin-top:10px; }
-  .yt-playpause{ flex:none; width:38px; height:38px; border-radius:50%; border:none; background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
-  .yt-progress-wrap{ flex:1; height:6px; background:#2a2a2f; border-radius:6px; cursor:pointer; overflow:hidden; }
-  .yt-progress-fill{ height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent2)); border-radius:6px; }
-  .yt-time{ flex:none; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:74px; text-align:right; }
-
   .bracket-wrap{ overflow-x:auto; max-width:100%; margin:10px 0 6px; padding:4px 0 12px; }
   .bracket-content{ position:relative; display:flex; align-items:stretch; width:max-content; }
   .bracket-svg{ position:absolute; top:0; left:0; pointer-events:none; z-index:0; }
@@ -302,9 +294,6 @@ const state = {
   selectedTrack:null
 };
 let searchDebounceHandle=null;
-let ytApiPromise=null;
-let ytPlayer=null;
-let ytProgressHandle=null;
 
 const app = document.getElementById('app');
 function render(){
@@ -2053,117 +2042,13 @@ function submissionMediaCardHtml(sub, label){
       <audio controls src="${sub.id}" style="width:100%;"></audio>
     </div>`;
   }
-  if(sub.source==='youtube'){
-    return `<div class="video-card">
-      <div class="tag">${label} 🎥</div>
-      <div class="yt-custom-player">
-        <div id="ytPlayerSlot" class="yt-player-frame" data-video-id="${escapeHtml(sub.id)}"></div>
-        <div class="yt-controls">
-          <button type="button" class="yt-playpause" id="ytPlayPauseBtn" onclick="toggleYtPlayback()">▶</button>
-          <div class="yt-progress-wrap" id="ytProgressWrap" onclick="seekYtPlayer(event)"><div class="yt-progress-fill" id="ytProgressFill"></div></div>
-          <div class="yt-time" id="ytTimeLabel">0:00 / 0:00</div>
-        </div>
-      </div>
-    </div>`;
-  }
-  const src = `https://open.spotify.com/embed/track/${sub.id}`;
-  return `<div class="video-card spotify">
-    <div class="tag">${label} 🎧</div>
+  const src = sub.source==='spotify'
+    ? `https://open.spotify.com/embed/track/${sub.id}`
+    : `https://www.youtube.com/embed/${sub.id}`;
+  return `<div class="video-card ${sub.source==='spotify'?'spotify':''}">
+    <div class="tag">${label} ${sub.source==='spotify'?'🎧':'🎥'}</div>
     <iframe src="${src}" allow="encrypted-media" allowfullscreen></iframe>
   </div>`;
-}
-
-/* ---------- LECTEUR YOUTUBE CUSTOM (API IFrame Player — pas de clé requise, script public) ----------
-   Remplace le player brut par des contrôles maison (lecture/pause, barre de progression cliquable,
-   temps écoulé/restant) et permet d'enchaîner automatiquement vers l'étape suivante une fois la
-   vidéo terminée. Monté/démonté depuis afterRender() en ciblant #ytPlayerSlot, jamais depuis render()
-   lui-même pour ne pas couper la lecture à chaque re-rendu de l'appli (voir handleYouTubeCustomPlayer). */
-function loadYouTubeApi(){
-  if(ytApiPromise) return ytApiPromise;
-  ytApiPromise = new Promise(resolve=>{
-    if(window.YT && window.YT.Player){ resolve(); return; }
-    const prevCallback = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = () => { if(typeof prevCallback==='function') prevCallback(); resolve(); };
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(tag);
-  });
-  return ytApiPromise;
-}
-// Appelé après CHAQUE render() (voir afterRender) : monte un lecteur custom si l'écran actuel contient
-// un slot YouTube, ou coupe proprement le suivi de progression si on a quitté un tel écran.
-function handleYouTubeCustomPlayer(){
-  const slot = document.getElementById('ytPlayerSlot');
-  if(!slot){
-    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
-    ytPlayer = null;
-    return;
-  }
-  const videoId = slot.getAttribute('data-video-id');
-  if(!videoId) return;
-  loadYouTubeApi().then(()=>{
-    // Chargement async : on revérifie que l'utilisateur est toujours sur ce même écran/morceau avant de monter.
-    const freshSlot = document.getElementById('ytPlayerSlot');
-    if(!freshSlot || freshSlot.getAttribute('data-video-id')!==videoId) return;
-    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
-    ytPlayer = new YT.Player('ytPlayerSlot', {
-      videoId,
-      playerVars:{ autoplay:1, controls:0, rel:0, modestbranding:1, playsinline:1 },
-      events:{
-        onReady:(e)=>{ e.target.playVideo(); },
-        onStateChange:(e)=>{
-          updateYtPlayPauseIcon(e.data===YT.PlayerState.PLAYING);
-          if(e.data===YT.PlayerState.PLAYING) startYtProgressPolling();
-          if(e.data===YT.PlayerState.ENDED) onYtPlaybackEnded();
-        }
-      }
-    });
-  });
-}
-function startYtProgressPolling(){
-  if(ytProgressHandle) return;
-  ytProgressHandle = setInterval(()=>{
-    if(!ytPlayer || typeof ytPlayer.getCurrentTime!=='function') return;
-    const cur = ytPlayer.getCurrentTime() || 0;
-    const dur = ytPlayer.getDuration() || 0;
-    const fill = document.getElementById('ytProgressFill');
-    const label = document.getElementById('ytTimeLabel');
-    if(fill && dur>0) fill.style.width = Math.min(100, (cur/dur)*100) + '%';
-    if(label) label.textContent = `${formatTime(Math.floor(cur))} / ${formatTime(Math.floor(dur))}`;
-  }, 500);
-}
-function toggleYtPlayback(){
-  if(!ytPlayer || typeof ytPlayer.getPlayerState!=='function') return;
-  ytPlayer.getPlayerState()===YT.PlayerState.PLAYING ? ytPlayer.pauseVideo() : ytPlayer.playVideo();
-}
-function updateYtPlayPauseIcon(isPlaying){
-  const btn = document.getElementById('ytPlayPauseBtn');
-  if(btn) btn.textContent = isPlaying ? '⏸' : '▶';
-}
-function seekYtPlayer(evt){
-  if(!ytPlayer || typeof ytPlayer.getDuration!=='function') return;
-  const wrap = document.getElementById('ytProgressWrap');
-  if(!wrap) return;
-  const rect = wrap.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, (evt.clientX-rect.left)/rect.width));
-  const dur = ytPlayer.getDuration() || 0;
-  if(dur>0) ytPlayer.seekTo(dur*ratio, true);
-}
-// Enchaîne automatiquement vers l'étape suivante quand la vidéo se termine — uniquement sur les écrans
-// d'écoute pure (Duel/Soirée/Roi et Battle Royale). En Chaîne Musicale on laisse la main : la personne doit
-// noter délibérément le lien avant de continuer, l'auto-avance n'aurait pas de sens là-bas.
-function onYtPlaybackEnded(){
-  if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
-  const fill = document.getElementById('ytProgressFill');
-  if(fill) fill.style.width = '100%';
-  if(state.screen==='playback'){
-    const isLast = (state.playbackIndex||0) >= state.order.length-1;
-    isLast ? goToVote() : nextPlaybackTrack();
-  } else if(state.screen==='battlePlayback'){
-    const b = state.battle;
-    const isLast = (b.playbackIndex||0) >= b.playbackOrder.length-1;
-    isLast ? goToBattleVote() : nextBattlePlaybackTrack();
-  }
 }
 
 /* ---------- PLAYBACK ---------- */
@@ -2429,7 +2314,6 @@ function afterRender(){
   const cp = document.getElementById('chainPlayerInput');
   if(cp){ cp.focus(); }
   if(state.screen==='bracketView'){ layoutBracket(); }
-  handleYouTubeCustomPlayer();
 }
 window.addEventListener('resize', ()=>{ if(state.screen==='bracketView') layoutBracket(); });
 
