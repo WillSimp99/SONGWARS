@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Nécessaire pour les embeds YouTube : un referrer trop restrictif (ou absent en file://) cause l'erreur 153
+     "Erreur de configuration du lecteur vidéo". Cette balise force l'envoi d'un referrer minimal dès que la
+     page est servie via http(s) — voir la doc de troubleshooting pour le cas file:// (aucun referrer possible). -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Music Battle — Prototype V1</title>
 <style>
   :root{
@@ -219,6 +223,15 @@
 
   .video-card.spotify iframe{ aspect-ratio:auto; height:152px; }
 
+  .yt-custom-player{ width:100%; }
+  .yt-player-frame{ width:100%; aspect-ratio:16/9; border-radius:10px; overflow:hidden; background:#000; }
+  .yt-controls{ display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .yt-playpause{ flex:none; width:38px; height:38px; border-radius:50%; border:none; background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .yt-progress-wrap{ flex:1; height:6px; background:#2a2a2f; border-radius:6px; cursor:pointer; overflow:hidden; }
+  .yt-progress-fill{ height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent2)); border-radius:6px; }
+  .yt-time{ flex:none; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:74px; text-align:right; }
+  .sp-art{ width:100%; aspect-ratio:16/9; border-radius:10px; background:linear-gradient(135deg,#1DB95433,#1DB95411); display:flex; align-items:center; justify-content:center; font-size:44px; }
+
   .bracket-wrap{ overflow-x:auto; max-width:100%; margin:10px 0 6px; padding:4px 0 12px; }
   .bracket-content{ position:relative; display:flex; align-items:stretch; width:max-content; }
   .bracket-svg{ position:absolute; top:0; left:0; pointer-events:none; z-index:0; }
@@ -285,6 +298,7 @@ const state = {
   localLibraryQuery:'',
   gameSettingsOpen:false,
   spotifyToken:null, spotifyTokenExpiry:0,
+  spotifyAuth:{accessToken:null, refreshToken:null, expiresAt:0},
   submitSource:'youtube',
   submitMode:'search',
   searchQuery:'',
@@ -294,6 +308,16 @@ const state = {
   selectedTrack:null
 };
 let searchDebounceHandle=null;
+let ytApiPromise=null;
+let ytPlayer=null;
+let ytProgressHandle=null;
+let spSdkPromise=null;
+let spPlayer=null;
+let spDeviceId=null;
+let spProgressHandle=null;
+let spLastState=null;
+let spWasNearEnd=false;
+let spCurrentTrackId=null;
 
 const app = document.getElementById('app');
 function render(){
@@ -405,6 +429,24 @@ function renderModeSelect(){
       <input type="text" id="spClientSecret" placeholder="Depuis developer.spotify.com" value="${escapeHtml(state.apiKeys.spotifySecret)}" oninput="state.apiKeys.spotifySecret=this.value; state.spotifyToken=null; saveApiKeys();">
       <p class="settings-hint">Ces clés restent uniquement dans ce navigateur (mémoire locale de ton appareil) — jamais écrites dans ce fichier, jamais envoyées ailleurs qu'à YouTube/Spotify directement.</p>
       ${hasSavedKeys ? `<button class="btn secondary small" onclick="forgetApiKeys()">Oublier mes clés sur cet appareil</button>` : ''}
+
+      <h3 style="margin-top:22px;">🎧 Compte Spotify — lecteur intégré complet</h3>
+      <p class="settings-hint">Connecte-toi avec ton compte Spotify (nécessite Spotify Premium sur ce compte) pour jouer les morceaux Spotify en entier avec un lecteur intégré, au lieu d'un extrait de 30 secondes. Utilise le Client ID ci-dessus (le Secret n'est pas nécessaire pour cette étape).</p>
+      <p class="settings-hint">⚠️ Avant de te connecter : copie-colle exactement la ligne ci-dessous (casse, slash final...) dans "Redirect URIs" de ton app sur <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a>, sinon Spotify refusera avec "redirect_uri: Not matching configuration".</p>
+      <div class="row" style="align-items:center; gap:8px;">
+        <code id="spRedirectUriDisplay" style="flex:1; word-break:break-all; background:#0e0e10; padding:8px 10px; border-radius:8px; font-size:12.5px; border:1px solid rgba(255,255,255,.08); display:block;">${escapeHtml(spotifyRedirectUri())}</code>
+        <button class="btn secondary small" onclick="copySpotifyRedirectUri()">Copier</button>
+      </div>
+      <div id="spRedirectCopyMsg" style="font-size:12px; color:var(--success); min-height:16px; margin-top:4px;"></div>
+      ${state.spotifyAuth.accessToken
+        ? `<div class="row" style="align-items:center;">
+            <span style="flex:1; font-weight:700; color:var(--success);">Connecté à Spotify ✓</span>
+            <button class="btn secondary small" onclick="disconnectSpotifyAccount()">Se déconnecter</button>
+          </div>`
+        : `<button class="btn secondary" ${state.apiKeys.spotifyId?'':'disabled'} onclick="connectSpotifyAccount()">Se connecter avec Spotify</button>
+           ${state.apiKeys.spotifyId ? '' : `<div class="settings-hint">Ajoute d'abord un Client ID Spotify ci-dessus.</div>`}`
+      }
+      <div id="spotifyAuthMsg"></div>
 
       <h3 style="margin-top:22px;">🎵 Bibliothèque de fichiers locaux${state.localLibrary.length?` — ${state.localLibrary.length} fichier${state.localLibrary.length>1?'s':''}`:''}</h3>
       <p class="settings-hint">Ajoute ici les morceaux (MP3, WAV...) d'artistes locaux ou inédits en une fois — tu pourras ensuite les rechercher directement à chaque round au lieu de re-sélectionner un fichier à chaque fois. Uniquement pour cette session de navigateur (les fichiers sont perdus si tu recharges la page).</p>
@@ -564,9 +606,11 @@ const SPECIAL_EFFECTS = [
   { key:'theme', icon:'🔮', label:'Thème Mystère', desc:"Un thème surprise est imposé pour ce round, même si la roue est désactivée.", isAvailable: (s)=> !s.wheelEnabled && s.themesLibrary.length>=1 },
   { key:'noveto', icon:'🙅', label:'Pas de Veto', desc:"L'hôte ne peut pas trancher directement ce round : seul le vote du public compte.", isAvailable: ()=>true }
 ];
+// Le round 1 n'est jamais tiré comme round spécial (on laisse toujours un round "normal" pour démarrer la partie
+// tranquillement) — le max sélectionnable dans les réglages et le pool de tirage en tiennent compte tous les deux.
 function specialRoundsMax(){
-  if(state.gameMode==='king') return state.king.matchFormat==='bo3' ? 3 : 1;
-  return Math.min(5, state.totalRounds);
+  if(state.gameMode==='king') return Math.max(0, (state.king.matchFormat==='bo3' ? 3 : 1) - 1);
+  return Math.max(0, Math.min(5, state.totalRounds - 1));
 }
 function adjustSpecialRounds(delta){
   const max = specialRoundsMax();
@@ -574,8 +618,9 @@ function adjustSpecialRounds(delta){
   render();
 }
 function computeSpecialRoundsPlan(total){
-  const n = Math.max(0, Math.min(state.specialRoundsCount||0, total));
-  state.specialRoundsPlan = shuffleArr([...Array(total).keys()].map(i=>i+1)).slice(0, n);
+  const eligibleRounds = [...Array(total).keys()].map(i=>i+1).filter(r=>r>1);
+  const n = Math.max(0, Math.min(state.specialRoundsCount||0, eligibleRounds.length));
+  state.specialRoundsPlan = shuffleArr(eligibleRounds).slice(0, n);
 }
 function pickSpecialEffect(){
   const pool = SPECIAL_EFFECTS.filter(e=>e.isAvailable(state));
@@ -1907,7 +1952,14 @@ async function searchYouTube(query){
   const key = state.apiKeys.youtube;
   if(!key) throw new Error("Ajoute une clé API YouTube dans les réglages (écran précédent), ou passe en mode Lien direct.");
   const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=6&q=${encodeURIComponent(query)}&key=${encodeURIComponent(key)}`);
-  if(!res.ok) throw new Error('Clé API YouTube invalide ou quota dépassé.');
+  if(!res.ok){
+    let reason = '';
+    try{
+      const errData = await res.json();
+      reason = (errData.error && (errData.error.message || (errData.error.errors && errData.error.errors[0] && errData.error.errors[0].reason))) || '';
+    }catch(e){ /* réponse non-JSON, on garde le message générique */ }
+    throw new Error(reason ? `Erreur YouTube (${res.status}) : ${reason}` : `Clé API YouTube invalide ou quota dépassé (code ${res.status}).`);
+  }
   const data = await res.json();
   return (data.items||[]).map(it=>({
     source:'youtube', id:it.id.videoId, title:it.snippet.title, subtitle:it.snippet.channelTitle,
@@ -1943,6 +1995,290 @@ async function searchSpotify(query){
     source:'spotify', id:t.id, title:t.name, subtitle:(t.artists||[]).map(a=>a.name).join(', '),
     thumbnail: t.album && t.album.images && t.album.images[t.album.images.length-1] && t.album.images[t.album.images.length-1].url
   }));
+}
+
+/* ---------- CONNEXION SPOTIFY (OAuth Authorization Code + PKCE) ----------
+   Flux distinct du token "Client Credentials" ci-dessus (qui sert uniquement à la recherche/aperçu 30s).
+   Ici on connecte le compte Spotify de l'hôte (Premium requis) pour piloter un vrai lecteur intégré
+   via le Web Playback SDK. Aucun Client Secret n'est nécessaire pour ce flux : PKCE le remplace par
+   un secret à usage unique généré côté navigateur. Redirige vers Spotify puis revient sur cette même
+   page (redirect URI = l'URL exacte de déploiement, ex. https://willsimp99.github.io/SONGWARS/). */
+const SPOTIFY_AUTH_STORAGE_KEY = 'musicBattle.spotifyAuth';
+const SPOTIFY_PKCE_VERIFIER_KEY = 'musicBattle.spotifyPkceVerifier';
+const SPOTIFY_PKCE_STATE_KEY = 'musicBattle.spotifyPkceState';
+const SPOTIFY_SCOPES = 'streaming user-read-email user-read-private user-modify-playback-state';
+function spotifyRedirectUri(){
+  return location.origin + location.pathname;
+}
+function generateRandomString(len){
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for(let i=0;i<len;i++) out += chars[bytes[i] % chars.length];
+  return out;
+}
+async function sha256Base64Url(str){
+  const data = new TextEncoder().encode(str);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  let binary = '';
+  const bytes = new Uint8Array(digest);
+  for(let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function copySpotifyRedirectUri(){
+  const uri = spotifyRedirectUri();
+  const msg = document.getElementById('spRedirectCopyMsg');
+  const done = ()=>{ if(msg){ msg.textContent = '✓ Copié !'; setTimeout(()=>{ if(msg) msg.textContent=''; }, 2000); } };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(uri).then(done).catch(()=>{
+      if(msg) msg.textContent = "Copie automatique indisponible — sélectionne le texte manuellement.";
+    });
+  } else if(msg){
+    msg.textContent = "Copie automatique indisponible — sélectionne le texte manuellement.";
+  }
+}
+async function connectSpotifyAccount(){
+  const clientId = state.apiKeys.spotifyId;
+  if(!clientId){
+    const msg = document.getElementById('spotifyAuthMsg');
+    if(msg) msg.innerHTML = '<div class="error-text">Ajoute d\'abord un Client ID Spotify ci-dessus.</div>';
+    return;
+  }
+  const verifier = generateRandomString(64);
+  const challenge = await sha256Base64Url(verifier);
+  const oauthState = generateRandomString(16);
+  try{
+    sessionStorage.setItem(SPOTIFY_PKCE_VERIFIER_KEY, verifier);
+    sessionStorage.setItem(SPOTIFY_PKCE_STATE_KEY, oauthState);
+  }catch(e){ /* stockage indisponible — la validation CSRF au retour échouera proprement */ }
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: spotifyRedirectUri(),
+    scope: SPOTIFY_SCOPES,
+    code_challenge_method: 'S256',
+    code_challenge: challenge,
+    state: oauthState
+  });
+  location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
+}
+// Appelé une fois au chargement de la page : si l'URL contient ?code=...&state=... (retour de Spotify),
+// échange le code contre les tokens puis nettoie l'URL. Ne fait rien si l'utilisateur n'a pas initié de connexion.
+async function handleSpotifyAuthRedirect(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  const returnedState = params.get('state');
+  const error = params.get('error');
+  if(!code && !error) return;
+  history.replaceState(null, '', location.pathname);
+  if(error) return;
+  let savedVerifier = null, savedState = null;
+  try{
+    savedVerifier = sessionStorage.getItem(SPOTIFY_PKCE_VERIFIER_KEY);
+    savedState = sessionStorage.getItem(SPOTIFY_PKCE_STATE_KEY);
+  }catch(e){ /* ignore */ }
+  if(!savedVerifier || !returnedState || returnedState!==savedState) return;
+  try{
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({
+        grant_type:'authorization_code',
+        code,
+        redirect_uri: spotifyRedirectUri(),
+        client_id: state.apiKeys.spotifyId,
+        code_verifier: savedVerifier
+      }).toString()
+    });
+    if(!res.ok) throw new Error("Échange du code d'autorisation Spotify échoué.");
+    const data = await res.json();
+    state.spotifyAuth = {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + ((data.expires_in||3600)-60)*1000
+    };
+    saveSpotifyAuth();
+  }catch(e){
+    console.error(e);
+  }finally{
+    try{
+      sessionStorage.removeItem(SPOTIFY_PKCE_VERIFIER_KEY);
+      sessionStorage.removeItem(SPOTIFY_PKCE_STATE_KEY);
+    }catch(e){ /* ignore */ }
+  }
+}
+async function refreshSpotifyAuthIfNeeded(){
+  if(!state.spotifyAuth.refreshToken) throw new Error('Compte Spotify non connecté.');
+  if(state.spotifyAuth.accessToken && Date.now() < state.spotifyAuth.expiresAt) return state.spotifyAuth.accessToken;
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({
+      grant_type:'refresh_token',
+      refresh_token: state.spotifyAuth.refreshToken,
+      client_id: state.apiKeys.spotifyId
+    }).toString()
+  });
+  if(!res.ok) throw new Error('Session Spotify expirée — reconnecte-toi.');
+  const data = await res.json();
+  state.spotifyAuth.accessToken = data.access_token;
+  if(data.refresh_token) state.spotifyAuth.refreshToken = data.refresh_token;
+  state.spotifyAuth.expiresAt = Date.now() + ((data.expires_in||3600)-60)*1000;
+  saveSpotifyAuth();
+  return state.spotifyAuth.accessToken;
+}
+function disconnectSpotifyAccount(){
+  state.spotifyAuth = {accessToken:null, refreshToken:null, expiresAt:0};
+  spPlayer = null; spDeviceId = null; spCurrentTrackId = null;
+  try{ localStorage.removeItem(SPOTIFY_AUTH_STORAGE_KEY); }catch(e){ /* ignore */ }
+  render();
+}
+function saveSpotifyAuth(){
+  try{ localStorage.setItem(SPOTIFY_AUTH_STORAGE_KEY, JSON.stringify(state.spotifyAuth)); }catch(e){ /* ignore */ }
+}
+function loadSpotifyAuth(){
+  try{
+    const raw = localStorage.getItem(SPOTIFY_AUTH_STORAGE_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      state.spotifyAuth = {
+        accessToken: parsed.accessToken || null,
+        refreshToken: parsed.refreshToken || null,
+        expiresAt: parsed.expiresAt || 0
+      };
+    }
+  }catch(e){ /* ignore */ }
+}
+
+/* ---------- LECTEUR SPOTIFY CUSTOM (Web Playback SDK — nécessite un compte connecté + Premium) ----------
+   Même logique de montage/démontage que le lecteur YouTube custom : tout se passe dans afterRender()
+   en ciblant #spPlayerCard, jamais dans render() lui-même (voir handleSpotifyCustomPlayer). Le player
+   Spotify lui-même (une fois créé) est persistant — on ne le recrée pas à chaque changement de morceau,
+   seulement au premier montage, puis on appelle juste l'API "play" avec le nouvel URI de piste. */
+function loadSpotifySdk(){
+  if(spSdkPromise) return spSdkPromise;
+  spSdkPromise = new Promise(resolve=>{
+    if(window.Spotify && window.Spotify.Player){ resolve(); return; }
+    const prevCallback = window.onSpotifyWebPlaybackSDKReady;
+    window.onSpotifyWebPlaybackSDKReady = () => { if(typeof prevCallback==='function') prevCallback(); resolve(); };
+    const tag = document.createElement('script');
+    tag.src = 'https://sdk.scdn.co/spotify-player.js';
+    document.head.appendChild(tag);
+  });
+  return spSdkPromise;
+}
+// Crée le lecteur persistant une seule fois (le connecte au compte de l'hôte) et résout avec son device_id,
+// nécessaire pour ensuite lui envoyer des ordres de lecture via l'API Web.
+function ensureSpotifyPlayerReady(){
+  if(spPlayer && spDeviceId) return Promise.resolve(spDeviceId);
+  return loadSpotifySdk().then(()=> new Promise((resolve, reject)=>{
+    if(spPlayer && spDeviceId){ resolve(spDeviceId); return; }
+    const player = new Spotify.Player({
+      name: 'Music Battle',
+      getOAuthToken: cb => { refreshSpotifyAuthIfNeeded().then(cb).catch(()=>cb('')); },
+      volume: 0.8
+    });
+    player.addListener('ready', ({device_id})=>{ spDeviceId = device_id; resolve(device_id); });
+    player.addListener('not_ready', ()=>{ spDeviceId = null; });
+    player.addListener('initialization_error', ({message})=>{ reject(new Error(message || "Le navigateur ne supporte pas le lecteur Spotify.")); });
+    player.addListener('authentication_error', ({message})=>{ reject(new Error(message || 'Authentification Spotify invalide — reconnecte-toi.')); });
+    player.addListener('account_error', ({message})=>{ reject(new Error(message || "Spotify Premium est requis sur le compte connecté pour la lecture intégrée.")); });
+    player.addListener('player_state_changed', handleSpotifyStateChanged);
+    player.connect();
+    spPlayer = player;
+  }));
+}
+async function playSpotifyTrackById(trackId){
+  const note = document.getElementById('spPlayerNote');
+  try{
+    const deviceId = await ensureSpotifyPlayerReady();
+    const token = await refreshSpotifyAuthIfNeeded();
+    spCurrentTrackId = trackId;
+    spWasNearEnd = false;
+    const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+      method:'PUT',
+      headers:{'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+      body: JSON.stringify({uris:[`spotify:track:${trackId}`]})
+    });
+    if(!res.ok && res.status!==204) throw new Error('Lecture Spotify impossible sur ce compte (Premium requis).');
+    if(note){ note.style.display='none'; note.textContent=''; }
+  }catch(e){
+    if(note){ note.textContent = '⚠️ ' + (e.message || 'Erreur du lecteur Spotify.'); note.style.display='block'; }
+  }
+}
+function handleSpotifyStateChanged(pbState){
+  if(!pbState) return;
+  spLastState = pbState;
+  updateSpPlayPauseIcon(!pbState.paused);
+  if(!pbState.paused) startSpProgressPolling();
+  const dur = pbState.duration || 0;
+  const nearEnd = dur>0 && (dur - pbState.position) < 1200;
+  if(pbState.paused && pbState.position===0 && spWasNearEnd){
+    spWasNearEnd = false;
+    onSpotifyPlaybackEnded();
+  } else if(nearEnd){
+    spWasNearEnd = true;
+  }
+}
+function startSpProgressPolling(){
+  if(spProgressHandle) return;
+  spProgressHandle = setInterval(()=>{
+    if(!spPlayer) return;
+    spPlayer.getCurrentState().then(pbState=>{
+      if(!pbState){ if(spProgressHandle){ clearInterval(spProgressHandle); spProgressHandle=null; } return; }
+      const cur = pbState.position || 0;
+      const dur = pbState.duration || 0;
+      const fill = document.getElementById('spProgressFill');
+      const label = document.getElementById('spTimeLabel');
+      if(fill && dur>0) fill.style.width = Math.min(100, (cur/dur)*100) + '%';
+      if(label) label.textContent = `${formatTime(Math.floor(cur/1000))} / ${formatTime(Math.floor(dur/1000))}`;
+      if(pbState.paused && spProgressHandle){ clearInterval(spProgressHandle); spProgressHandle=null; }
+    });
+  }, 500);
+}
+function toggleSpPlayback(){
+  if(!spPlayer) return;
+  spPlayer.togglePlay();
+}
+function updateSpPlayPauseIcon(isPlaying){
+  const btn = document.getElementById('spPlayPauseBtn');
+  if(btn) btn.textContent = isPlaying ? '⏸' : '▶';
+}
+function seekSpPlayer(evt){
+  if(!spPlayer || !spLastState) return;
+  const wrap = document.getElementById('spProgressWrap');
+  if(!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (evt.clientX-rect.left)/rect.width));
+  const dur = spLastState.duration || 0;
+  if(dur>0) spPlayer.seek(dur*ratio);
+}
+// Même logique d'auto-avance que côté YouTube (voir onYtPlaybackEnded) — pas d'auto-avance en Chaîne Musicale.
+function onSpotifyPlaybackEnded(){
+  if(spProgressHandle){ clearInterval(spProgressHandle); spProgressHandle=null; }
+  const fill = document.getElementById('spProgressFill');
+  if(fill) fill.style.width = '100%';
+  if(state.screen==='playback'){
+    const isLast = (state.playbackIndex||0) >= state.order.length-1;
+    isLast ? goToVote() : nextPlaybackTrack();
+  } else if(state.screen==='battlePlayback'){
+    const b = state.battle;
+    const isLast = (b.playbackIndex||0) >= b.playbackOrder.length-1;
+    isLast ? goToBattleVote() : nextBattlePlaybackTrack();
+  }
+}
+// Appelé après CHAQUE render() (voir afterRender) : monte/relance le lecteur Spotify custom si l'écran
+// actuel contient une carte #spPlayerCard avec un nouveau data-track-id.
+function handleSpotifyCustomPlayer(){
+  const card = document.getElementById('spPlayerCard');
+  if(!card){
+    if(spProgressHandle){ clearInterval(spProgressHandle); spProgressHandle=null; }
+    return;
+  }
+  const trackId = card.getAttribute('data-track-id');
+  if(!trackId || trackId===spCurrentTrackId) return;
+  playSpotifyTrackById(trackId);
 }
 function renderSearchResultsHtml(){
   if(state.selectedTrack) return '';
@@ -2042,13 +2378,143 @@ function submissionMediaCardHtml(sub, label){
       <audio controls src="${sub.id}" style="width:100%;"></audio>
     </div>`;
   }
-  const src = sub.source==='spotify'
-    ? `https://open.spotify.com/embed/track/${sub.id}`
-    : `https://www.youtube.com/embed/${sub.id}`;
-  return `<div class="video-card ${sub.source==='spotify'?'spotify':''}">
-    <div class="tag">${label} ${sub.source==='spotify'?'🎧':'🎥'}</div>
+  if(sub.source==='youtube'){
+    return `<div class="video-card">
+      <div class="tag">${label} 🎥</div>
+      <div class="yt-custom-player">
+        <div id="ytPlayerSlot" class="yt-player-frame" data-video-id="${escapeHtml(sub.id)}"></div>
+        <div class="yt-controls">
+          <button type="button" class="yt-playpause" id="ytPlayPauseBtn" onclick="toggleYtPlayback()">▶</button>
+          <div class="yt-progress-wrap" id="ytProgressWrap" onclick="seekYtPlayer(event)"><div class="yt-progress-fill" id="ytProgressFill"></div></div>
+          <div class="yt-time" id="ytTimeLabel">0:00 / 0:00</div>
+        </div>
+        <div class="error-text" id="ytPlayerNote" style="display:none;"></div>
+      </div>
+    </div>`;
+  }
+  if(state.spotifyAuth && state.spotifyAuth.accessToken){
+    return `<div class="video-card">
+      <div class="tag">${label} 🎧</div>
+      <div class="yt-custom-player" id="spPlayerCard" data-track-id="${escapeHtml(sub.id)}">
+        <div class="sp-art">🎧</div>
+        <div class="yt-controls">
+          <button type="button" class="yt-playpause" id="spPlayPauseBtn" onclick="toggleSpPlayback()">▶</button>
+          <div class="yt-progress-wrap" id="spProgressWrap" onclick="seekSpPlayer(event)"><div class="yt-progress-fill" id="spProgressFill"></div></div>
+          <div class="yt-time" id="spTimeLabel">0:00 / 0:00</div>
+        </div>
+        <div class="error-text" id="spPlayerNote" style="display:none;"></div>
+      </div>
+    </div>`;
+  }
+  const src = `https://open.spotify.com/embed/track/${sub.id}`;
+  return `<div class="video-card spotify">
+    <div class="tag">${label} 🎧</div>
     <iframe src="${src}" allow="encrypted-media" allowfullscreen></iframe>
   </div>`;
+}
+
+/* ---------- LECTEUR YOUTUBE CUSTOM (API IFrame Player — pas de clé requise, script public) ----------
+   Remplace le player brut par des contrôles maison (lecture/pause, barre de progression cliquable,
+   temps écoulé/restant) et permet d'enchaîner automatiquement vers l'étape suivante une fois la
+   vidéo terminée. Monté/démonté depuis afterRender() en ciblant #ytPlayerSlot, jamais depuis render()
+   lui-même pour ne pas couper la lecture à chaque re-rendu de l'appli (voir handleYouTubeCustomPlayer). */
+function loadYouTubeApi(){
+  if(ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise(resolve=>{
+    if(window.YT && window.YT.Player){ resolve(); return; }
+    const prevCallback = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { if(typeof prevCallback==='function') prevCallback(); resolve(); };
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  });
+  return ytApiPromise;
+}
+// Appelé après CHAQUE render() (voir afterRender) : monte un lecteur custom si l'écran actuel contient
+// un slot YouTube, ou coupe proprement le suivi de progression si on a quitté un tel écran.
+function handleYouTubeCustomPlayer(){
+  const slot = document.getElementById('ytPlayerSlot');
+  if(!slot){
+    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+    ytPlayer = null;
+    return;
+  }
+  const videoId = slot.getAttribute('data-video-id');
+  if(!videoId) return;
+  loadYouTubeApi().then(()=>{
+    // Chargement async : on revérifie que l'utilisateur est toujours sur ce même écran/morceau avant de monter.
+    const freshSlot = document.getElementById('ytPlayerSlot');
+    if(!freshSlot || freshSlot.getAttribute('data-video-id')!==videoId) return;
+    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+    ytPlayer = new YT.Player('ytPlayerSlot', {
+      videoId,
+      host:'https://www.youtube-nocookie.com',
+      playerVars:{ autoplay:1, controls:0, rel:0, modestbranding:1, playsinline:1 },
+      events:{
+        onReady:(e)=>{ e.target.playVideo(); },
+        onStateChange:(e)=>{
+          updateYtPlayPauseIcon(e.data===YT.PlayerState.PLAYING);
+          if(e.data===YT.PlayerState.PLAYING) startYtProgressPolling();
+          if(e.data===YT.PlayerState.ENDED) onYtPlaybackEnded();
+        },
+        onError:(e)=>{
+          // 101/150 : intégration désactivée par le créateur. 153 : referrer bloqué (voir la balise <meta name="referrer">
+          // en tête de fichier — si l'app tourne en file:// ce cas peut rester impossible à éviter côté navigateur).
+          const messages = {2:'Lien vidéo invalide.', 5:'Erreur du lecteur HTML5.', 100:'Vidéo introuvable ou privée.',
+            101:"Le créateur a désactivé l'intégration de cette vidéo ailleurs que sur YouTube.",
+            150:"Le créateur a désactivé l'intégration de cette vidéo ailleurs que sur YouTube.",
+            153:"Erreur de configuration du lecteur (souvent lié au referrer bloqué en file:// — ouvre le fichier via un serveur local, ou utilise le lien direct)."};
+          const note = document.getElementById('ytPlayerNote');
+          if(note){ note.textContent = '⚠️ ' + (messages[e.data] || 'Cette vidéo ne peut pas être lue ici.') + ' Utilise "Changer de morceau" pour en choisir une autre.'; note.style.display='block'; }
+        }
+      }
+    });
+  });
+}
+function startYtProgressPolling(){
+  if(ytProgressHandle) return;
+  ytProgressHandle = setInterval(()=>{
+    if(!ytPlayer || typeof ytPlayer.getCurrentTime!=='function') return;
+    const cur = ytPlayer.getCurrentTime() || 0;
+    const dur = ytPlayer.getDuration() || 0;
+    const fill = document.getElementById('ytProgressFill');
+    const label = document.getElementById('ytTimeLabel');
+    if(fill && dur>0) fill.style.width = Math.min(100, (cur/dur)*100) + '%';
+    if(label) label.textContent = `${formatTime(Math.floor(cur))} / ${formatTime(Math.floor(dur))}`;
+  }, 500);
+}
+function toggleYtPlayback(){
+  if(!ytPlayer || typeof ytPlayer.getPlayerState!=='function') return;
+  ytPlayer.getPlayerState()===YT.PlayerState.PLAYING ? ytPlayer.pauseVideo() : ytPlayer.playVideo();
+}
+function updateYtPlayPauseIcon(isPlaying){
+  const btn = document.getElementById('ytPlayPauseBtn');
+  if(btn) btn.textContent = isPlaying ? '⏸' : '▶';
+}
+function seekYtPlayer(evt){
+  if(!ytPlayer || typeof ytPlayer.getDuration!=='function') return;
+  const wrap = document.getElementById('ytProgressWrap');
+  if(!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (evt.clientX-rect.left)/rect.width));
+  const dur = ytPlayer.getDuration() || 0;
+  if(dur>0) ytPlayer.seekTo(dur*ratio, true);
+}
+// Enchaîne automatiquement vers l'étape suivante quand la vidéo se termine — uniquement sur les écrans
+// d'écoute pure (Duel/Soirée/Roi et Battle Royale). En Chaîne Musicale on laisse la main : la personne doit
+// noter délibérément le lien avant de continuer, l'auto-avance n'aurait pas de sens là-bas.
+function onYtPlaybackEnded(){
+  if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+  const fill = document.getElementById('ytProgressFill');
+  if(fill) fill.style.width = '100%';
+  if(state.screen==='playback'){
+    const isLast = (state.playbackIndex||0) >= state.order.length-1;
+    isLast ? goToVote() : nextPlaybackTrack();
+  } else if(state.screen==='battlePlayback'){
+    const b = state.battle;
+    const isLast = (b.playbackIndex||0) >= b.playbackOrder.length-1;
+    isLast ? goToBattleVote() : nextBattlePlaybackTrack();
+  }
 }
 
 /* ---------- PLAYBACK ---------- */
@@ -2314,12 +2780,18 @@ function afterRender(){
   const cp = document.getElementById('chainPlayerInput');
   if(cp){ cp.focus(); }
   if(state.screen==='bracketView'){ layoutBracket(); }
+  handleYouTubeCustomPlayer();
+  handleSpotifyCustomPlayer();
 }
 window.addEventListener('resize', ()=>{ if(state.screen==='bracketView') layoutBracket(); });
 
-loadApiKeys();
-loadThemesLibrary();
-render();
+(async function initApp(){
+  loadApiKeys();
+  loadThemesLibrary();
+  loadSpotifyAuth();
+  await handleSpotifyAuthRedirect();
+  render();
+})();
 </script>
 
 <div style="max-width:460px;margin:10px auto 0;text-align:center;">
