@@ -128,6 +128,12 @@
   .scoreboard-multi .slot{ flex:none; min-width:60px; text-align:center; background:#141417; border-radius:10px; padding:7px 10px; }
   .scoreboard-multi .slot .name{ font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:78px; }
   .scoreboard-multi .slot .val{ font-size:22px; font-weight:900; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .special-banner{ background:linear-gradient(135deg, rgba(255,92,92,.16), rgba(255,140,66,.16)); border:1px solid rgba(255,140,66,.4);
+    border-radius:12px; padding:10px 14px; margin-bottom:14px; font-size:13.5px; font-weight:800; text-align:center; }
+  .special-banner .sub{ font-weight:500; font-size:12px; color:var(--muted); margin-top:4px; }
+  .rating-grid{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:14px 0; }
+  .rating-btn{ width:42px; height:42px; border-radius:10px; border:1px solid rgba(255,255,255,.15); background:#0e0e10; color:var(--text); font-size:15px; font-weight:800; cursor:pointer; }
+  .rating-btn.active{ background:linear-gradient(135deg,var(--accent),var(--accent2)); border-color:transparent; color:#fff; }
   .wheel-wrap{ position:relative; width:250px; height:250px; margin:10px auto 20px; }
   .wheel-pointer{
     position:absolute; top:-6px; left:50%; transform:translateX(-50%);
@@ -213,6 +219,14 @@
 
   .video-card.spotify iframe{ aspect-ratio:auto; height:152px; }
 
+  .yt-custom-player{ width:100%; }
+  .yt-player-frame{ width:100%; aspect-ratio:16/9; border-radius:10px; overflow:hidden; background:#000; }
+  .yt-controls{ display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .yt-playpause{ flex:none; width:38px; height:38px; border-radius:50%; border:none; background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .yt-progress-wrap{ flex:1; height:6px; background:#2a2a2f; border-radius:6px; cursor:pointer; overflow:hidden; }
+  .yt-progress-fill{ height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent2)); border-radius:6px; }
+  .yt-time{ flex:none; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:74px; text-align:right; }
+
   .bracket-wrap{ overflow-x:auto; max-width:100%; margin:10px 0 6px; padding:4px 0 12px; }
   .bracket-content{ position:relative; display:flex; align-items:stretch; width:max-content; }
   .bracket-svg{ position:absolute; top:0; left:0; pointer-events:none; z-index:0; }
@@ -248,6 +262,8 @@ const state = {
   party:{ participants:[], artistMode:false, rounds:[], bracketSize:0, championIdx:null, currentMatch:null },
   king:{ kingIdx:null, participants:[], queue:[], streak:0, history:[], roundsToWinHill:10, matchFormat:'bo1' },
   battle:{ players:[], scores:[], submitOrder:[], submitStep:0, submissions:[], playbackOrder:[], playbackIndex:0, ballot:[], ballotLocked:false, roundPoints:[], totalBallots:0, hostPickOpen:false },
+  chain:{ players:[], log:[], ratingSelected:null },
+  chainLinkDraft:'',
   p1Name:'Joueur 1', p2Name:'Joueur 2',
   totalRounds:5,
   wheelEnabled:false,
@@ -258,6 +274,9 @@ const state = {
   themesLibraryBulkDraft:'',
   timerEnabled:false, timerSeconds:90,
   timerRemaining:0, timerHandle:null,
+  specialRoundsCount:0,
+  specialRoundsPlan:[],
+  currentSpecialEffect:null,
   round:1,
   scoreP1:0, scoreP2:0,
   currentTheme:null,
@@ -283,6 +302,9 @@ const state = {
   selectedTrack:null
 };
 let searchDebounceHandle=null;
+let ytApiPromise=null;
+let ytPlayer=null;
+let ytProgressHandle=null;
 
 const app = document.getElementById('app');
 function render(){
@@ -303,6 +325,11 @@ function render(){
     battleVote: renderBattleVote,
     battleResult: renderBattleResult,
     battleGameOver: renderBattleGameOver,
+    chainSetup: renderChainSetup,
+    chainHandoff: renderChainHandoff,
+    chainSubmit: renderChainSubmit,
+    chainClosing: renderChainClosing,
+    chainGameOver: renderChainGameOver,
     wheelSpin: renderWheelSpin,
     playback: renderPlayback,
     vote: renderVote,
@@ -320,10 +347,12 @@ function logo(){
 const BACK_TARGETS = {
   battleSetup:'modeSelect',
   partySetup:'modeSelect',
-  kingSetup:'modeSelect'
+  kingSetup:'modeSelect',
+  chainSetup:'modeSelect'
 };
 const QUIT_SCREENS = ['wheelSpin','handoff','submit','playback','vote','result','bracketView','kingView',
-  'battleHandoff','battleSubmit','battlePlayback','battleVote','battleResult'];
+  'battleHandoff','battleSubmit','battlePlayback','battleVote','battleResult',
+  'chainHandoff','chainSubmit','chainClosing'];
 function renderNav(){
   if(state.screen in BACK_TARGETS){
     return `<div class="nav-bar"><button class="nav-btn" onclick="goBack()">← Retour</button></div>`;
@@ -371,6 +400,7 @@ function renderModeSelect(){
     <button class="btn" onclick="chooseMode('battle')">🎉 Battle Royale — 2 à 10 joueurs, top 3 marque des points</button>
     <button class="btn secondary" onclick="chooseMode('party')">🏆 Mode Soirée — l'hôte gère tout, tournoi à plusieurs</button>
     <button class="btn secondary" onclick="chooseMode('king')">👑 Roi de la colline — un roi affronte des challengers</button>
+    <button class="btn secondary" onclick="chooseMode('chain')">🔗 Chaîne Musicale — reliez les morceaux, notez le lien /10</button>
 
     <details class="settings" ${state.homeSettingsOpen?'open':''} ontoggle="state.homeSettingsOpen=this.open;">
       <summary>⚙️ Réglages (optionnel)</summary>
@@ -434,7 +464,7 @@ function addToLibrary(input){
 function removeFromLibrary(i){ state.localLibrary.splice(i,1); render(); }
 function chooseMode(mode){
   state.gameMode = mode;
-  state.screen = mode==='battle' ? 'battleSetup' : mode==='party' ? 'partySetup' : 'kingSetup';
+  state.screen = mode==='battle' ? 'battleSetup' : mode==='party' ? 'partySetup' : mode==='chain' ? 'chainSetup' : 'kingSetup';
   render();
 }
 function isHostManaged(){ return state.gameMode==='party' || state.gameMode==='king'; }
@@ -480,10 +510,22 @@ function renderGameSettingsDetails(opts){
       <label class="switch"><input type="checkbox" ${state.party.artistMode?'checked':''} onchange="toggleArtistMode(this.checked)"><span class="slider"></span></label>
     </div>
   ` : '';
+  const specialMax = specialRoundsMax();
+  const specialRoundsBlock = opts.noSpecialRounds ? '' : `
+    <label>Rounds spéciaux 🔥 <span style="font-weight:400; color:var(--muted);">(0 à ${specialMax})</span></label>
+    <div class="stepper">
+      <button onclick="adjustSpecialRounds(-1)">−</button>
+      <div class="num">${Math.min(state.specialRoundsCount||0, specialMax)}</div>
+      <button onclick="adjustSpecialRounds(1)">+</button>
+    </div>
+    <p class="settings-hint">Ce nombre de rounds tirés au hasard dans la partie auront un effet surprise (chrono éclair, points doublés, vol de point, thème mystère...) pour pimenter le jeu.</p>
+  `;
   return `<details class="settings" ${state.gameSettingsOpen?'open':''} ontoggle="state.gameSettingsOpen=this.open;">
     <summary>Réglages de partie</summary>
 
     ${roundsBlock}
+
+    ${specialRoundsBlock}
 
     ${artistToggleBlock}
 
@@ -512,6 +554,7 @@ function renderGameSettingsDetails(opts){
 }
 function adjustRounds(delta){
   state.totalRounds = Math.min(9, Math.max(1, state.totalRounds+delta));
+  state.specialRoundsCount = Math.min(state.specialRoundsCount||0, specialRoundsMax());
   render();
 }
 function adjustHillTarget(delta){
@@ -520,7 +563,45 @@ function adjustHillTarget(delta){
 }
 function setKingMatchFormat(fmt){
   state.king.matchFormat = fmt;
+  state.specialRoundsCount = Math.min(state.specialRoundsCount||0, specialRoundsMax());
   render();
+}
+
+/* ---------- ROUNDS SPÉCIAUX ("cartes malédiction") ---------- */
+const SPECIAL_EFFECTS = [
+  { key:'lightning', icon:'⚡', label:'Chrono Éclair', desc:"Chrono de soumission forcé à 30 secondes, même s'il est désactivé.", isAvailable: ()=>true },
+  { key:'double', icon:'💰', label:'Points Doublés', desc:"Le gagnant du round remporte 2 points au lieu d'1.", isAvailable: ()=>true },
+  { key:'steal', icon:'🥷', label:'Vol de Point', desc:"Le gagnant vole en plus 1 point à son adversaire direct.", isAvailable: ()=>true },
+  { key:'theme', icon:'🔮', label:'Thème Mystère', desc:"Un thème surprise est imposé pour ce round, même si la roue est désactivée.", isAvailable: (s)=> !s.wheelEnabled && s.themesLibrary.length>=1 },
+  { key:'noveto', icon:'🙅', label:'Pas de Veto', desc:"L'hôte ne peut pas trancher directement ce round : seul le vote du public compte.", isAvailable: ()=>true }
+];
+function specialRoundsMax(){
+  if(state.gameMode==='king') return state.king.matchFormat==='bo3' ? 3 : 1;
+  return Math.min(5, state.totalRounds);
+}
+function adjustSpecialRounds(delta){
+  const max = specialRoundsMax();
+  state.specialRoundsCount = Math.min(max, Math.max(0, (state.specialRoundsCount||0)+delta));
+  render();
+}
+function computeSpecialRoundsPlan(total){
+  const n = Math.max(0, Math.min(state.specialRoundsCount||0, total));
+  state.specialRoundsPlan = shuffleArr([...Array(total).keys()].map(i=>i+1)).slice(0, n);
+}
+function pickSpecialEffect(){
+  const pool = SPECIAL_EFFECTS.filter(e=>e.isAvailable(state));
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+function specialRoundBannerHtml(){
+  const e = state.currentSpecialEffect;
+  if(!e) return '';
+  return `<div class="special-banner">🔥 Round spécial — ${e.icon} ${e.label}<div class="sub">${e.desc}</div></div>`;
+}
+function isTimerActiveThisRound(){
+  return state.timerEnabled || (state.currentSpecialEffect && state.currentSpecialEffect.key==='lightning');
+}
+function effectiveTimerSeconds(){
+  return (state.currentSpecialEffect && state.currentSpecialEffect.key==='lightning') ? 30 : state.timerSeconds;
 }
 function toggleTimerOption(checked){
   state.timerEnabled = checked;
@@ -571,12 +652,17 @@ function startBattle(){
   if(b.players.length<2) return;
   b.scores = b.players.map(()=>0);
   state.round = 1; state.history = [];
+  computeSpecialRoundsPlan(state.totalRounds);
   if(state.wheelEnabled) primeThemesPoolFromLibrary();
   beginBattleRound();
 }
 function beginBattleRound(){
   const b = state.battle;
   state.currentTheme = null;
+  state.currentSpecialEffect = (state.specialRoundsPlan||[]).includes(state.round) ? pickSpecialEffect() : null;
+  if(state.currentSpecialEffect && state.currentSpecialEffect.key==='theme' && state.themesLibrary.length){
+    state.currentTheme = state.themesLibrary[Math.floor(Math.random()*state.themesLibrary.length)];
+  }
   b.submissions = b.players.map(()=>null);
   b.submitOrder = b.players.map((_,i)=>i);
   b.submitStep = 0;
@@ -598,6 +684,7 @@ function renderBattleHandoff(){
   const name = b.players[playerIdx].name;
   return `<div class="card handoff">
     ${battleHeaderBar()}
+    ${specialRoundBannerHtml()}
     <div class="avatar">📱</div>
     <p>Passe l'appareil à</p>
     <div class="player-tag p1">${escapeHtml(name)}</div>
@@ -623,10 +710,11 @@ function renderBattleSubmit(){
   const name = b.players[playerIdx].name;
   return `<div class="card">
     ${battleHeaderBar()}
+    ${specialRoundBannerHtml()}
     <div class="player-tag p1">${escapeHtml(name)}</div>
     <h2>Soumets ton morceau</h2>
     ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : `<p>Pas de thème ce round — carte blanche.</p>`}
-    ${state.timerEnabled ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+    ${isTimerActiveThisRound() ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
     ${renderSubmissionFormBodyHtml('submitBattleSong')}
   </div>`;
 }
@@ -712,8 +800,10 @@ function renderBattleVote(){
       ${rankPos>=0 ? `<span style="font-weight:800; font-size:13px; flex:none;">${rankLabels[rankPos]}</span>` : ''}
     </div>`;
   }).join('');
+  const noVeto = state.currentSpecialEffect && state.currentSpecialEffect.key==='noveto';
   return `<div class="card">
     ${battleHeaderBar()}
+    ${specialRoundBannerHtml()}
     <h2>Vote — ton top ${ballotSize}</h2>
     <p>Fais passer le téléphone : chaque personne clique dans l'ordre sur son ${ballotSize===3?'1er, 2e puis 3e':'1er puis 2e'} morceau préféré (pas le sien !). Le classement se valide automatiquement une fois complet.</p>
     <div class="search-list">${rows}</div>
@@ -724,11 +814,11 @@ function renderBattleVote(){
 
     <button class="btn" onclick="closeBattleVote()">Clôturer le vote et révéler le résultat</button>
 
-    <details class="settings" ${b.hostPickOpen?'open':''} ontoggle="state.battle.hostPickOpen=this.open;">
+    ${noVeto ? '' : `<details class="settings" ${b.hostPickOpen?'open':''} ontoggle="state.battle.hostPickOpen=this.open;">
       <summary>👑 Option hôte — trancher directement</summary>
       <p class="settings-hint">Choisis toi-même le podium du round. Ça clôture le vote immédiatement (remplace les votes déjà comptés).</p>
       ${renderHostBattlePickerHtml()}
-    </details>
+    </details>`}
   </div>`;
 }
 function tapBattleVote(slotIndex){
@@ -804,7 +894,16 @@ function renderBattleResult(){
   const maxPoints = Math.max(...b.roundPoints);
   const winners = b.roundPoints.map((p,i)=>p===maxPoints?i:-1).filter(i=>i>=0);
   const isTie = maxPoints===0 || winners.length>1;
-  if(!isTie) b.scores[winners[0]]++;
+  const effectKey = state.currentSpecialEffect ? state.currentSpecialEffect.key : null;
+  const gainedPoints = effectKey==='double' ? 2 : 1;
+  if(!isTie){
+    b.scores[winners[0]] += gainedPoints;
+    if(effectKey==='steal'){
+      const sortedIdx = b.roundPoints.map((p,i)=>({i,p})).sort((x,y)=>y.p-x.p);
+      const runnerUp = sortedIdx.find(x=>x.i!==winners[0]);
+      if(runnerUp) b.scores[runnerUp.i] = Math.max(0, b.scores[runnerUp.i]-1);
+    }
+  }
   const winnerName = !isTie ? b.players[winners[0]].name
     : (maxPoints===0 ? 'Aucun vote exploitable — le round va être rejoué' : 'Égalité parfaite — le round va être rejoué');
 
@@ -832,6 +931,7 @@ function renderBattleResult(){
 
   return `<div class="card">
     ${battleHeaderBar()}
+    ${specialRoundBannerHtml()}
     <div class="result-winner">
       <div class="big">${!isTie?'🏆':'🤝'}</div>
       <div class="name">${escapeHtml(winnerName)}</div>
@@ -863,6 +963,248 @@ function renderBattleGameOver(){
     ${leaderboard}
     <h3 style="margin-top:16px;">Récap des rounds</h3>
     ${recap}
+    <button class="btn" onclick="resetGame()">Rejouer</button>
+  </div>`;
+}
+
+/* ---------- CHAÎNE MUSICALE (2 à 10 joueurs, note de 1 à 10 sur le lien avec le morceau précédent) ---------- */
+function chainHeaderBar(){
+  const c = state.chain;
+  const slots = c.players.map((p,i)=>{
+    const avg = chainAverage(i);
+    return `<div class="slot"><div class="name">${escapeHtml(p.name)}</div><div class="val">${avg==null?'—':avg.toFixed(1)}</div></div>`;
+  }).join('');
+  return `<div class="scoreboard-multi">
+    <div class="round-tag">Manche<br>${state.round}/${state.totalRounds}</div>
+    ${slots}
+  </div>`;
+}
+function renderChainSetup(){
+  const c = state.chain;
+  const chips = c.players.map((p,i)=>`
+    <div class="chip"><span>${escapeHtml(p.name)}</span><button onclick="removeChainPlayer(${i})">✕</button></div>
+  `).join('') || `<div class="theme-empty">Aucun joueur ajouté pour l'instant</div>`;
+  const atMax = c.players.length>=10;
+  return `<div class="card">
+    <h1>Chaîne Musicale — configuration</h1>
+    <p>De 2 à 10 joueurs. Chacun à son tour écoute le morceau précédent, note sur 10 le lien annoncé par son auteur, puis propose le sien relié d'une façon ou d'une autre — jusqu'à boucler la chaîne. La meilleure moyenne à la fin gagne.</p>
+
+    <label>Nom du joueur</label>
+    <input type="text" id="chainPlayerInput" placeholder="Ex : Louis" ${atMax?'disabled':''} onkeydown="if(event.key==='Enter'){event.preventDefault();addChainPlayer();}">
+    <button class="btn secondary" ${atMax?'disabled':''} onclick="addChainPlayer()">+ Ajouter le joueur</button>
+    ${atMax?'<div class="error-text">Maximum 10 joueurs.</div>':''}
+
+    <div style="margin-top:14px;">${chips}</div>
+
+    ${renderGameSettingsDetails({roundsLabel:'Nombre de manches', noSpecialRounds:true})}
+
+    <button class="btn" ${c.players.length<2 || state.totalRounds<2 ?'disabled':''} onclick="startChain()">Lancer la chaîne (${c.players.length} joueur${c.players.length>1?'s':''})</button>
+    ${c.players.length<2?'<div class="error-text">Ajoute au moins 2 joueurs.</div>':''}
+    ${state.totalRounds<2?'<div class="error-text">Il faut au moins 2 manches pour pouvoir noter un lien.</div>':''}
+  </div>`;
+}
+function addChainPlayer(){
+  if(state.chain.players.length>=10) return;
+  const input = document.getElementById('chainPlayerInput');
+  const name = input.value.trim();
+  if(!name) return;
+  state.chain.players.push({name});
+  input.value = '';
+  render();
+}
+function removeChainPlayer(i){ state.chain.players.splice(i,1); render(); }
+function startChain(){
+  const c = state.chain;
+  if(c.players.length<2 || state.totalRounds<2) return;
+  c.log = [];
+  c.ratingSelected = null;
+  state.round = 1; state.history = [];
+  if(state.wheelEnabled) primeThemesPoolFromLibrary();
+  beginChainRound();
+}
+function beginChainRound(){
+  state.currentTheme = null;
+  state.hostPickOpen = false;
+  state.chain.ratingSelected = null;
+  state.screen = state.wheelEnabled && state.themesPool.length>=2 ? 'wheelSpin' : 'chainHandoff';
+  render();
+}
+function chainCurrentIdx(){ return (state.round-1) % state.chain.players.length; }
+function renderChainHandoff(){
+  const c = state.chain;
+  const idx = chainCurrentIdx();
+  const name = c.players[idx].name;
+  const hasPrev = c.log.length>0;
+  return `<div class="card handoff">
+    ${chainHeaderBar()}
+    <div class="avatar">📱</div>
+    <p>Passe l'appareil à</p>
+    <div class="player-tag p1">${escapeHtml(name)}</div>
+    <p>${hasPrev ? "Les autres ne doivent pas regarder l'écran — tu vas d'abord noter le morceau précédent, puis proposer le tien en aveugle." : "Tu ouvres la chaîne : choisis un premier morceau, n'importe lequel."}</p>
+    <button class="btn" onclick="goToChainSubmit()">C'est bon, je suis prêt·e</button>
+  </div>`;
+}
+function goToChainSubmit(){
+  state.screen='chainSubmit';
+  const src = state.submitSource;
+  if(src==='local'){
+    state.submitMode = state.localLibrary.length ? 'library' : 'newfile';
+  } else {
+    state.submitMode = (src==='youtube' ? !!state.apiKeys.youtube : !!(state.apiKeys.spotifyId && state.apiKeys.spotifySecret)) ? 'search' : 'link';
+  }
+  state.searchQuery=''; state.searchResults=[]; state.searchLoading=false; state.searchError=''; state.selectedTrack=null; state.localLibraryQuery='';
+  state.chain.ratingSelected = null;
+  state.chainLinkDraft = '';
+  render();
+  startTimerIfEnabled();
+}
+function renderChainSubmit(){
+  const c = state.chain;
+  const idx = chainCurrentIdx();
+  const name = c.players[idx].name;
+  const prevEntry = c.log.length ? c.log[c.log.length-1] : null;
+  const needsRating = !!prevEntry && prevEntry.rating==null && !!prevEntry.link;
+
+  if(needsRating){
+    const sel = c.ratingSelected;
+    const ratingButtons = Array.from({length:10},(_,i)=>i+1).map(n=>`
+      <button type="button" class="rating-btn ${sel===n?'active':''}" onclick="selectChainRating(${n})">${n}</button>
+    `).join('');
+    return `<div class="card">
+      ${chainHeaderBar()}
+      <div class="player-tag p1">${escapeHtml(name)}</div>
+      <h2>Écoute le morceau précédent</h2>
+      ${submissionMediaCardHtml(prevEntry.sub, 'Morceau précédent')}
+      ${prevEntry.link ? `<p><b>Lien proposé :</b> ${escapeHtml(prevEntry.link)}</p>` : ''}
+      ${isTimerActiveThisRound() ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+      <p>Note de 1 à 10 à quel point ce lien tient la route :</p>
+      <div class="rating-grid">${ratingButtons}</div>
+      <button class="btn" ${sel==null?'disabled':''} onclick="confirmChainRating()">Valider la note</button>
+    </div>`;
+  }
+
+  return `<div class="card">
+    ${chainHeaderBar()}
+    <div class="player-tag p1">${escapeHtml(name)}</div>
+    <h2>Soumets ton morceau</h2>
+    ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : ''}
+    ${prevEntry ? `<label>Quel est le lien avec le morceau précédent ?</label><input type="text" id="chainLinkInput" placeholder="Ex : même décennie, featuring en commun..." value="${escapeHtml(state.chainLinkDraft||'')}" oninput="state.chainLinkDraft=this.value;">` : `<p>Premier morceau de la chaîne — carte blanche, n'importe quel son pour démarrer.</p>`}
+    ${isTimerActiveThisRound() ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+    ${renderSubmissionFormBodyHtml('submitChainSong')}
+  </div>`;
+}
+function selectChainRating(n){ state.chain.ratingSelected = n; render(); }
+function confirmChainRating(){
+  const c = state.chain;
+  if(c.ratingSelected==null) return;
+  c.log[c.log.length-1].rating = c.ratingSelected;
+  c.ratingSelected = null;
+  render();
+}
+function submitChainSong(){
+  const c = state.chain;
+  const idx = chainCurrentIdx();
+  const prevEntry = c.log.length ? c.log[c.log.length-1] : null;
+  const linkInput = document.getElementById('chainLinkInput');
+  const link = prevEntry ? (linkInput ? linkInput.value.trim() : '') : '';
+  if(prevEntry && !link){
+    if(linkInput) linkInput.style.borderColor = 'var(--danger)';
+    return;
+  }
+
+  if(state.selectedTrack){
+    const t = state.selectedTrack;
+    stopTimer();
+    c.log.push({playerIdx:idx, sub:{source:t.source, id:t.id, url:null, title:t.title, thumbnail:t.thumbnail}, link, rating:null});
+    advanceAfterChainSubmit();
+    return;
+  }
+
+  const urlInput = document.getElementById('trackUrl');
+  const url = urlInput ? urlInput.value.trim() : '';
+  const src = state.submitSource;
+  const id = src==='youtube' ? extractYouTubeId(url) : extractSpotifyId(url);
+  if(!id){
+    const err = document.getElementById('urlError');
+    if(err) err.style.display='block';
+    return;
+  }
+  stopTimer();
+  const entry = {playerIdx:idx, sub:{source:src, id, url, title:null, thumbnail:null}, link, rating:null};
+  c.log.push(entry);
+  fetchTitle(src, url).then(title=>{ entry.sub.title = title; });
+  advanceAfterChainSubmit();
+}
+function advanceAfterChainSubmit(){
+  state.chainLinkDraft = '';
+  if(state.round >= state.totalRounds){
+    state.screen = 'chainClosing';
+    render();
+    return;
+  }
+  state.round++;
+  state.currentTheme = null;
+  state.screen = state.wheelEnabled && state.themesPool.length>=2 ? 'wheelSpin' : 'chainHandoff';
+  render();
+}
+function forfeitCurrentChainPlayer(){
+  const c = state.chain;
+  const idx = chainCurrentIdx();
+  const prevEntry = c.log.length ? c.log[c.log.length-1] : null;
+  if(prevEntry && prevEntry.rating==null) prevEntry.rating = 5; // note neutre par défaut si le temps est écoulé
+  c.log.push({playerIdx:idx, sub:{source:null, id:null, url:null, title:'Forfait', thumbnail:null}, link: prevEntry?'(forfait)':'', rating:null});
+  advanceAfterChainSubmit();
+}
+function renderChainClosing(){
+  const c = state.chain;
+  const lastEntry = c.log[c.log.length-1];
+  const raterIdx = state.round % c.players.length;
+  const raterName = c.players[raterIdx].name;
+  const sel = c.ratingSelected;
+  const ratingButtons = Array.from({length:10},(_,i)=>i+1).map(n=>`
+    <button type="button" class="rating-btn ${sel===n?'active':''}" onclick="selectChainRating(${n})">${n}</button>
+  `).join('');
+  return `<div class="card">
+    ${chainHeaderBar()}
+    <div class="player-tag p1">${escapeHtml(raterName)}</div>
+    <h2>Dernière note — on boucle la chaîne</h2>
+    <p>Écoute le tout dernier morceau de la chaîne et note son lien, pour clôturer la boucle.</p>
+    ${submissionMediaCardHtml(lastEntry.sub, 'Dernier morceau')}
+    ${lastEntry.link ? `<p><b>Lien proposé :</b> ${escapeHtml(lastEntry.link)}</p>` : ''}
+    <div class="rating-grid">${ratingButtons}</div>
+    <button class="btn" ${sel==null?'disabled':''} onclick="confirmClosingRating()">Valider la note et voir les résultats</button>
+  </div>`;
+}
+function confirmClosingRating(){
+  const c = state.chain;
+  if(c.ratingSelected==null) return;
+  c.log[c.log.length-1].rating = c.ratingSelected;
+  c.ratingSelected = null;
+  state.screen = 'chainGameOver';
+  render();
+}
+function chainAverage(playerIdx){
+  const entries = state.chain.log.filter(e=>e.playerIdx===playerIdx && e.rating!=null);
+  if(!entries.length) return null;
+  return entries.reduce((s,e)=>s+e.rating,0)/entries.length;
+}
+function renderChainGameOver(){
+  const c = state.chain;
+  const rows = c.players.map((p,i)=>({name:p.name, avg:chainAverage(i)}))
+    .sort((a,b)=>(b.avg==null?-1:b.avg)-(a.avg==null?-1:a.avg));
+  const best = rows.find(r=>r.avg!=null);
+  const champions = best ? rows.filter(r=>r.avg===best.avg).map(r=>r.name) : [];
+  const winnerName = champions.length>1 ? champions.join(' & ')+' (égalité)' : (champions[0] || null);
+  const leaderboard = rows.map((r,i)=>`<div class="recap-item"><span>${i+1}. ${escapeHtml(r.name)}</span><b>${r.avg==null?'—':r.avg.toFixed(1)+'/10'}</b></div>`).join('');
+  const chainHistory = c.log.map((e,i)=>`
+    <div class="recap-item"><span>${i+1}. ${escapeHtml(c.players[e.playerIdx].name)}${e.link?' — '+escapeHtml(e.link):''}</span><b>${e.rating!=null?e.rating+'/10':'—'}</b></div>
+  `).join('');
+  return `<div class="card">
+    <h1 style="text-align:center;">🔗 ${winnerName ? escapeHtml(winnerName)+' remporte la chaîne !' : 'Personne n’a été noté'}</h1>
+    <h3 style="margin-top:16px;">Classement (moyenne des notes reçues)</h3>
+    ${leaderboard}
+    <h3 style="margin-top:16px;">La chaîne complète</h3>
+    ${chainHistory}
     <button class="btn" onclick="resetGame()">Rejouer</button>
   </div>`;
 }
@@ -1030,6 +1372,7 @@ function launchMatch(r,m){
   state.p1Name = state.party.participants[match.a].name;
   state.p2Name = state.party.participants[match.b].name;
   state.scoreP1=0; state.scoreP2=0; state.round=1; state.history=[];
+  computeSpecialRoundsPlan(state.totalRounds);
   beginRound();
 }
 function currentMatchArtists(){
@@ -1282,6 +1625,7 @@ function launchKingMatch(){
   // chaque défi vs le roi est un mini-match indépendant : 1 son chacun (bo1) ou 2 victoires sur 3 (bo3)
   state.totalRounds = k.matchFormat==='bo3' ? 3 : 1;
   state.scoreP1=0; state.scoreP2=0; state.round=1; state.history=[];
+  computeSpecialRoundsPlan(state.totalRounds);
   beginRound();
 }
 function finishKingMatch(){
@@ -1338,6 +1682,10 @@ function beginRound(){
   state.votes = {A:0,B:0};
   state.playbackIndex = 0;
   state.hostPickOpen = false;
+  state.currentSpecialEffect = (state.specialRoundsPlan||[]).includes(state.round) ? pickSpecialEffect() : null;
+  if(state.currentSpecialEffect && state.currentSpecialEffect.key==='theme' && state.themesLibrary.length){
+    state.currentTheme = state.themesLibrary[Math.floor(Math.random()*state.themesLibrary.length)];
+  }
   state.screen = state.wheelEnabled && state.themesPool.length>=2 ? 'wheelSpin' : 'handoff';
   render();
 }
@@ -1351,7 +1699,7 @@ function renderWheelSpin(){
     return `${c} ${i*seg}deg ${(i+1)*seg}deg`;
   }).join(', ');
   return `<div class="card">
-    ${state.gameMode==='battle' ? battleHeaderBar() : headerBar()}
+    ${state.gameMode==='battle' ? battleHeaderBar() : state.gameMode==='chain' ? chainHeaderBar() : headerBar()}
     <h2 style="text-align:center;">La roue tourne...</h2>
     <p style="text-align:center;">Le thème imposé pour ce round va être tiré au sort.</p>
     <div class="wheel-wrap">
@@ -1383,8 +1731,9 @@ function spinWheel(){
     document.getElementById('spinBtn').outerHTML = `<button class="btn" onclick="proceedAfterWheel()">Continuer</button>`;
   }, 4100);
 }
-function skipWheel(){ state.currentTheme=null; state.screen = state.gameMode==='battle' ? 'battleHandoff' : 'handoff'; render(); }
-function proceedAfterWheel(){ state.screen = state.gameMode==='battle' ? 'battleHandoff' : 'handoff'; render(); }
+function postWheelScreen(){ return state.gameMode==='battle' ? 'battleHandoff' : state.gameMode==='chain' ? 'chainHandoff' : 'handoff'; }
+function skipWheel(){ state.currentTheme=null; state.screen = postWheelScreen(); render(); }
+function proceedAfterWheel(){ state.screen = postWheelScreen(); render(); }
 
 /* ---------- HANDOFF (blind pick simulation) ---------- */
 function renderHandoff(){
@@ -1394,6 +1743,7 @@ function renderHandoff(){
   const isHost = isHostManaged();
   return `<div class="card handoff">
     ${headerBar()}
+    ${specialRoundBannerHtml()}
     <div class="avatar">${isHost?'🎤':'📱'}</div>
     <p>${isHost ? "Va demander son morceau à" : "Passe l'appareil à"}</p>
     <div class="player-tag ${cls}">${escapeHtml(name)}</div>
@@ -1424,11 +1774,12 @@ function renderSubmit(){
   const artistNote = artists ? `<p><b>🎤 Artiste imposé :</b> ${escapeHtml(isP1?artists.p1:artists.p2)} — le morceau doit être de cet artiste.</p>` : '';
   return `<div class="card">
     ${headerBar()}
+    ${specialRoundBannerHtml()}
     <div class="player-tag ${cls}">${escapeHtml(name)}</div>
     <h2>${isHostManaged() ? 'Renseigne son morceau' : 'Soumets ton morceau'}</h2>
     ${artistNote}
     ${state.currentTheme ? `<p><b>Thème imposé :</b> ${escapeHtml(state.currentTheme)}</p>` : (artists ? '' : `<p>Pas de thème ce round — carte blanche.</p>`)}
-    ${state.timerEnabled ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
+    ${isTimerActiveThisRound() ? `<div class="timer" id="timerDisplay">${formatTime(state.timerRemaining)}</div>` : ''}
     ${renderSubmissionFormBodyHtml('submitSong')}
   </div>`;
 }
@@ -1670,8 +2021,8 @@ function forfeitCurrentPlayer(){
 
 /* ---------- TIMER ---------- */
 function startTimerIfEnabled(){
-  if(!state.timerEnabled) return;
-  state.timerRemaining = state.timerSeconds;
+  if(!isTimerActiveThisRound()) return;
+  state.timerRemaining = effectiveTimerSeconds();
   clearInterval(state.timerHandle);
   state.timerHandle = setInterval(()=>{
     state.timerRemaining--;
@@ -1682,7 +2033,9 @@ function startTimerIfEnabled(){
     }
     if(state.timerRemaining<=0){
       stopTimer();
-      if(state.gameMode==='battle') forfeitCurrentBattlePlayer(); else forfeitCurrentPlayer();
+      if(state.gameMode==='battle') forfeitCurrentBattlePlayer();
+      else if(state.gameMode==='chain') forfeitCurrentChainPlayer();
+      else forfeitCurrentPlayer();
     }
   },1000);
 }
@@ -1700,13 +2053,117 @@ function submissionMediaCardHtml(sub, label){
       <audio controls src="${sub.id}" style="width:100%;"></audio>
     </div>`;
   }
-  const src = sub.source==='spotify'
-    ? `https://open.spotify.com/embed/track/${sub.id}`
-    : `https://www.youtube.com/embed/${sub.id}`;
-  return `<div class="video-card ${sub.source==='spotify'?'spotify':''}">
-    <div class="tag">${label} ${sub.source==='spotify'?'🎧':'🎥'}</div>
+  if(sub.source==='youtube'){
+    return `<div class="video-card">
+      <div class="tag">${label} 🎥</div>
+      <div class="yt-custom-player">
+        <div id="ytPlayerSlot" class="yt-player-frame" data-video-id="${escapeHtml(sub.id)}"></div>
+        <div class="yt-controls">
+          <button type="button" class="yt-playpause" id="ytPlayPauseBtn" onclick="toggleYtPlayback()">▶</button>
+          <div class="yt-progress-wrap" id="ytProgressWrap" onclick="seekYtPlayer(event)"><div class="yt-progress-fill" id="ytProgressFill"></div></div>
+          <div class="yt-time" id="ytTimeLabel">0:00 / 0:00</div>
+        </div>
+      </div>
+    </div>`;
+  }
+  const src = `https://open.spotify.com/embed/track/${sub.id}`;
+  return `<div class="video-card spotify">
+    <div class="tag">${label} 🎧</div>
     <iframe src="${src}" allow="encrypted-media" allowfullscreen></iframe>
   </div>`;
+}
+
+/* ---------- LECTEUR YOUTUBE CUSTOM (API IFrame Player — pas de clé requise, script public) ----------
+   Remplace le player brut par des contrôles maison (lecture/pause, barre de progression cliquable,
+   temps écoulé/restant) et permet d'enchaîner automatiquement vers l'étape suivante une fois la
+   vidéo terminée. Monté/démonté depuis afterRender() en ciblant #ytPlayerSlot, jamais depuis render()
+   lui-même pour ne pas couper la lecture à chaque re-rendu de l'appli (voir handleYouTubeCustomPlayer). */
+function loadYouTubeApi(){
+  if(ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise(resolve=>{
+    if(window.YT && window.YT.Player){ resolve(); return; }
+    const prevCallback = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { if(typeof prevCallback==='function') prevCallback(); resolve(); };
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  });
+  return ytApiPromise;
+}
+// Appelé après CHAQUE render() (voir afterRender) : monte un lecteur custom si l'écran actuel contient
+// un slot YouTube, ou coupe proprement le suivi de progression si on a quitté un tel écran.
+function handleYouTubeCustomPlayer(){
+  const slot = document.getElementById('ytPlayerSlot');
+  if(!slot){
+    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+    ytPlayer = null;
+    return;
+  }
+  const videoId = slot.getAttribute('data-video-id');
+  if(!videoId) return;
+  loadYouTubeApi().then(()=>{
+    // Chargement async : on revérifie que l'utilisateur est toujours sur ce même écran/morceau avant de monter.
+    const freshSlot = document.getElementById('ytPlayerSlot');
+    if(!freshSlot || freshSlot.getAttribute('data-video-id')!==videoId) return;
+    if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+    ytPlayer = new YT.Player('ytPlayerSlot', {
+      videoId,
+      playerVars:{ autoplay:1, controls:0, rel:0, modestbranding:1, playsinline:1 },
+      events:{
+        onReady:(e)=>{ e.target.playVideo(); },
+        onStateChange:(e)=>{
+          updateYtPlayPauseIcon(e.data===YT.PlayerState.PLAYING);
+          if(e.data===YT.PlayerState.PLAYING) startYtProgressPolling();
+          if(e.data===YT.PlayerState.ENDED) onYtPlaybackEnded();
+        }
+      }
+    });
+  });
+}
+function startYtProgressPolling(){
+  if(ytProgressHandle) return;
+  ytProgressHandle = setInterval(()=>{
+    if(!ytPlayer || typeof ytPlayer.getCurrentTime!=='function') return;
+    const cur = ytPlayer.getCurrentTime() || 0;
+    const dur = ytPlayer.getDuration() || 0;
+    const fill = document.getElementById('ytProgressFill');
+    const label = document.getElementById('ytTimeLabel');
+    if(fill && dur>0) fill.style.width = Math.min(100, (cur/dur)*100) + '%';
+    if(label) label.textContent = `${formatTime(Math.floor(cur))} / ${formatTime(Math.floor(dur))}`;
+  }, 500);
+}
+function toggleYtPlayback(){
+  if(!ytPlayer || typeof ytPlayer.getPlayerState!=='function') return;
+  ytPlayer.getPlayerState()===YT.PlayerState.PLAYING ? ytPlayer.pauseVideo() : ytPlayer.playVideo();
+}
+function updateYtPlayPauseIcon(isPlaying){
+  const btn = document.getElementById('ytPlayPauseBtn');
+  if(btn) btn.textContent = isPlaying ? '⏸' : '▶';
+}
+function seekYtPlayer(evt){
+  if(!ytPlayer || typeof ytPlayer.getDuration!=='function') return;
+  const wrap = document.getElementById('ytProgressWrap');
+  if(!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (evt.clientX-rect.left)/rect.width));
+  const dur = ytPlayer.getDuration() || 0;
+  if(dur>0) ytPlayer.seekTo(dur*ratio, true);
+}
+// Enchaîne automatiquement vers l'étape suivante quand la vidéo se termine — uniquement sur les écrans
+// d'écoute pure (Duel/Soirée/Roi et Battle Royale). En Chaîne Musicale on laisse la main : la personne doit
+// noter délibérément le lien avant de continuer, l'auto-avance n'aurait pas de sens là-bas.
+function onYtPlaybackEnded(){
+  if(ytProgressHandle){ clearInterval(ytProgressHandle); ytProgressHandle=null; }
+  const fill = document.getElementById('ytProgressFill');
+  if(fill) fill.style.width = '100%';
+  if(state.screen==='playback'){
+    const isLast = (state.playbackIndex||0) >= state.order.length-1;
+    isLast ? goToVote() : nextPlaybackTrack();
+  } else if(state.screen==='battlePlayback'){
+    const b = state.battle;
+    const isLast = (b.playbackIndex||0) >= b.playbackOrder.length-1;
+    isLast ? goToBattleVote() : nextBattlePlaybackTrack();
+  }
 }
 
 /* ---------- PLAYBACK ---------- */
@@ -1735,8 +2192,10 @@ function goToVote(){ state.screen='vote'; render(); }
 /* ---------- VOTE (simulated) ---------- */
 function renderVote(){
   const totalVotes = state.votes.A + state.votes.B;
+  const noVeto = state.currentSpecialEffect && state.currentSpecialEffect.key==='noveto';
   return `<div class="card">
     ${headerBar()}
+    ${specialRoundBannerHtml()}
     <h2>Vote en local</h2>
     <p>Fais passer le téléphone : chaque personne tape une fois sur le morceau qu'elle préfère. Le décompte reste caché jusqu'à la clôture, pour ne pas influencer les votes suivants.</p>
 
@@ -1748,14 +2207,14 @@ function renderVote(){
 
     <button class="btn" onclick="closeVote()">Clôturer le vote et révéler le résultat</button>
 
-    <details class="settings" ${state.hostPickOpen?'open':''} ontoggle="state.hostPickOpen=this.open;">
+    ${noVeto ? '' : `<details class="settings" ${state.hostPickOpen?'open':''} ontoggle="state.hostPickOpen=this.open;">
       <summary>👑 Option hôte — trancher directement</summary>
       <p class="settings-hint">Pour départager toi-même sans attendre les votes (pratique si tu juges seul, ou pour trancher rapidement). Choisir ici clôture le vote immédiatement.</p>
       <div class="row">
         <button class="btn secondary" style="flex:1;" onclick="hostPickWinner('A')">🏆 Morceau A</button>
         <button class="btn secondary" style="flex:1;" onclick="hostPickWinner('B')">🏆 Morceau B</button>
       </div>
-    </details>
+    </details>`}
   </div>`;
 }
 function castVote(choice){
@@ -1781,8 +2240,10 @@ function renderResult(){
   const winnerLetter = isTie ? null : (state.votes.A>state.votes.B ? 'A':'B');
   const winnerIndex = winnerLetter==='A' ? 0 : winnerLetter==='B' ? 1 : null;
   const winnerPlayer = winnerIndex!==null ? state.order[winnerIndex] : null;
-  if(winnerPlayer==='p1') state.scoreP1++;
-  if(winnerPlayer==='p2') state.scoreP2++;
+  const effectKey = state.currentSpecialEffect ? state.currentSpecialEffect.key : null;
+  const gainedPoints = effectKey==='double' ? 2 : 1;
+  if(winnerPlayer==='p1'){ state.scoreP1 += gainedPoints; if(effectKey==='steal') state.scoreP2 = Math.max(0, state.scoreP2-1); }
+  if(winnerPlayer==='p2'){ state.scoreP2 += gainedPoints; if(effectKey==='steal') state.scoreP1 = Math.max(0, state.scoreP1-1); }
   const winnerName = winnerPlayer ? (winnerPlayer==='p1'?state.p1Name:state.p2Name) : 'Égalité parfaite — le round va être rejoué';
 
   const reveals = state.order.map((p,i)=>{
@@ -1807,6 +2268,7 @@ function renderResult(){
 
   return `<div class="card">
     ${headerBar()}
+    ${specialRoundBannerHtml()}
     <div class="result-winner">
       <div class="big">${winnerPlayer?'🏆':'🤝'}</div>
       <div class="name">${escapeHtml(winnerName)}</div>
@@ -1858,12 +2320,14 @@ function renderGameOver(){
 }
 function resetGame(){
   Object.assign(state, {
-    screen:'modeSelect', gameMode:'battle', round:1, scoreP1:0, scoreP2:0, currentTheme:null, wheelRotation:0,
+    screen:'modeSelect', gameMode:'battle', round:1, totalRounds:5, scoreP1:0, scoreP2:0, currentTheme:null, wheelRotation:0,
     submitStage:'p1', submissions:{p1:null,p2:null}, votes:{A:0,B:0}, playbackIndex:0, hostPickOpen:false, history:[],
     themesPool:[], wheelEnabled:false, gameSettingsOpen:false,
+    specialRoundsCount:0, specialRoundsPlan:[], currentSpecialEffect:null,
     party:{ participants:[], artistMode:false, rounds:[], bracketSize:0, championIdx:null, currentMatch:null },
     king:{ kingIdx:null, participants:[], queue:[], streak:0, history:[], roundsToWinHill:10, matchFormat:'bo1' },
-    battle:{ players:[], scores:[], submitOrder:[], submitStep:0, submissions:[], playbackOrder:[], playbackIndex:0, ballot:[], ballotLocked:false, roundPoints:[], totalBallots:0, hostPickOpen:false }
+    battle:{ players:[], scores:[], submitOrder:[], submitStep:0, submissions:[], playbackOrder:[], playbackIndex:0, ballot:[], ballotLocked:false, roundPoints:[], totalBallots:0, hostPickOpen:false },
+    chain:{ players:[], log:[], ratingSelected:null }, chainLinkDraft:''
   });
   render();
 }
@@ -1962,7 +2426,10 @@ function afterRender(){
   if(kn){ kn.focus(); }
   const bp = document.getElementById('battlePlayerInput');
   if(bp){ bp.focus(); }
+  const cp = document.getElementById('chainPlayerInput');
+  if(cp){ cp.focus(); }
   if(state.screen==='bracketView'){ layoutBracket(); }
+  handleYouTubeCustomPlayer();
 }
 window.addEventListener('resize', ()=>{ if(state.screen==='bracketView') layoutBracket(); });
 
